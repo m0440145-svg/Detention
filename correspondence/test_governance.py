@@ -159,6 +159,13 @@ class GovernanceAcceptanceTests(TestCase):
         self.assertEqual(m.status,'done');self.assertIsNotNone(m.referrals.get().completed_at);self.assertTrue(services.verify_chain(m))
     def test_attachment_preview_scopes_types_and_audit(self):
         m=self.mail();a=services.attach(self.people[Role.EMPLOYEE],m,SimpleUploadedFile('proof.txt',b'proof'),'سبب')
-        self.client.force_login(self.people[Role.EMPLOYEE]);r=self.client.get(f'/communications/files/{a.pk}/preview/');self.assertEqual(r.status_code,200);self.assertEqual(r['Cache-Control'],'no-store');r.close()
+        self.client.force_login(self.people[Role.EMPLOYEE]);r=self.client.get(f'/communications/files/{a.pk}/preview/');self.assertEqual(r.status_code,200);self.assertEqual(r['Cache-Control'],'no-store');self.assertEqual(b''.join(r.streaming_content),b'proof')
         self.client.force_login(self.outsider);self.assertEqual(self.client.get(f'/communications/files/{a.pk}/preview/').status_code,404)
         self.assertTrue(services.verify_chain(m))
+
+    def test_bulk_referral_html_and_atomic_scope(self):
+        m=self.mail();second=self.mail(external_number='EXT-2');self.client.force_login(self.people[Role.EXECUTIVE])
+        result=self.client.post('/communications/bulk/',{'mail_ids':[m.pk,second.pk],'action':'refer','reason':'طلب جماعي','recipients':[self.people[Role.EMPLOYEE].pk],'instruction':'execute','mode':'parallel'})
+        self.assertEqual(result.status_code,302);self.assertEqual(Referral.objects.filter(mail__in=[m,second]).count(),2)
+        with self.assertRaises(PermissionDenied):services.bulk_refer(self.people[Role.EXECUTIVE],[m.pk,999999],[self.people[Role.EMPLOYEE]],'execute','سبب')
+        self.assertEqual(Referral.objects.filter(mail=m).count(),1)

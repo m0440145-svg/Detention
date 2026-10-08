@@ -63,7 +63,7 @@ def listing(request,box='all'):
     elif box=='mine': qs=qs.filter(Q(owner=request.user)|Q(referrals__recipient=request.user,referrals__completed_at__isnull=True)).distinct()
     from django.core.paginator import Paginator
     title={'all':'سجل المراسلات','inbox':'صندوق الوارد','outbox':'صندوق الصادر','archive':'أرشيف المراسلات','mine':'بانتظار إجرائي'}.get(box,'المراسلات')
-    return render(request,'correspondence/list.html',{'title':title,'rows':Paginator(qs,30).get_page(request.GET.get('page')),'kinds':Kind.choices,'statuses':MailStatus.choices,'priorities':Correspondence._meta.get_field('priority').choices})
+    return render(request,'correspondence/list.html',{'title':title,'rows':Paginator(qs,30).get_page(request.GET.get('page')),'kinds':Kind.choices,'statuses':MailStatus.choices,'priorities':Correspondence._meta.get_field('priority').choices,'referral_form':ReferralForm(mail=Correspondence(secrecy='internal'))})
 
 @login_required
 def compose(request,pk=None):
@@ -209,7 +209,12 @@ def saved_searches(request):
 def bulk_view(request):
     try:
         ids=[int(x) for x in request.POST.getlist('mail_ids')]
-        result=services.bulk_action(request.user,ids,request.POST.get('action'),request.POST.get('reason',''),ip(request))
+        if request.POST.get('action')=='refer':
+            form=ReferralForm(request.POST,mail=Correspondence(secrecy='internal'))
+            if not form.is_valid():raise ValidationError('حدد المستلمين والتأشيرة ونوع الإحالة.')
+            services.reason_required(request.POST.get('reason',''))
+            data=form.cleaned_data;result=services.bulk_refer(request.user,ids,data['recipients'],data['instruction'],request.POST.get('reason','')+' '+data.get('note',''),data['mode'],ip(request))
+        else:result=services.bulk_action(request.user,ids,request.POST.get('action'),request.POST.get('reason',''),ip(request))
         messages.success(request,f"سجل الإجراء على {result['processed']} مراسلة.")
     except (ValueError,ValidationError,PermissionDenied) as exc: messages.error(request,fail(exc))
     return redirect('mail-list',box='all')

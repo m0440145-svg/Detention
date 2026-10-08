@@ -458,3 +458,12 @@ def update_access(user,mail,authorized,cc,reason,ip=''):
     old={'authorized':list(mail.authorized.values_list('pk',flat=True)),'cc':list(mail.cc.values_list('pk',flat=True))}
     mail.authorized.set(people);mail.cc.set(carbon)
     event(mail,user,'تغيير قائمة التصريح',reason,old,{'authorized':[p.pk for p in people],'cc':[p.pk for p in carbon]},ip)
+
+@transaction.atomic
+def bulk_refer(user,ids,recipients,instruction,note='',mode='parallel',ip=''):
+    if not isinstance(ids,list) or not 1<=len(ids)<=100 or any(not isinstance(x,int) or isinstance(x,bool) for x in ids):raise ValidationError('اختر من 1 إلى 100 مراسلة.')
+    rows=list(visible(user).filter(pk__in=set(ids)))
+    if len(rows)!=len(set(ids)):raise PermissionDenied('الدفعة خارج الصلاحية.')
+    count=0
+    for mail in rows:count+=len(refer(user,mail,recipients,instruction,note,ip,mode))
+    return {'processed':len(rows),'referrals':count}
