@@ -6,7 +6,8 @@ from django.core.management.base import BaseCommand,CommandError
 from django.utils import timezone
 from core.models import User,Meeting
 from meetinghub.models import Member,Committee,MeetingRecord
-from meetinghub import services
+from meetinghub import services,session_services as ops
+from django.core.files.uploadedfile import SimpleUploadedFile
 
 class Command(BaseCommand):
     help='Create visibly fictional meeting data in an explicitly isolated DEBUG demo.'
@@ -27,4 +28,14 @@ class Command(BaseCommand):
             executive=User.objects.get(username='demo-01')
             row=services.save_meeting(executive,{'number':'DEMO-MTG-001','name':'اجتماع تجريبي — خطة التنفيذ','committee':committee,'kind':'ordinary','mode':'onsite','starts_at':starts,'ends_at':starts+timedelta(hours=2),'venue':'قاعة افتراضية للعرض','rsvp_deadline':starts-timedelta(days=1),'quorum_percent':Decimal('50'),'quorum_reference':'قيمة تجريبية فقط؛ لا تمثل نسبة معتمدة للجمعية','allow_proxy':False,'proxy_limit':0,'secrecy':'internal'},members,reason='إنشاء اجتماع تجريبي مستقل')
             services.meeting_action(executive,row,'schedule','جدولة تجريبية دون إرسال دعوات',row.version)
-        self.stdout.write('Created explicitly fictional meeting members, committee and one scheduled meeting; no invitation sent.')
+        row=MeetingRecord.objects.get(meeting__number='DEMO-MTG-001');executive=User.objects.get(username='demo-01')
+        if not row.agenda_version:
+            for title,kind,duration in [('متابعة خطة التنفيذ — بند تجريبي','discussion',30),('استعراض مؤشرات المهام — بند تجريبي','briefing',20)]:
+                item=ops.save_item(executive,row,{'title':title,'kind':kind,'duration':duration,'presenter':members[0],'owner':members[1],'notes':'محتوى عرض تجريبي؛ لا يمثل قرارًا أو إجراءً فعليًا.'},'إعداد جدول تجريبي',row.version);row.refresh_from_db()
+            ops.upload_file(executive,row,SimpleUploadedFile('demo-agenda.txt','وثيقة عرض تجريبية لجدول الأعمال'.encode()),'مرفق تجريبي',row.version,item);row.refresh_from_db()
+            ops.publish_agenda(executive,row,'نشر إصدار عرض تجريبي',row.version);row.refresh_from_db()
+        if not row.roster_generation:
+            ops.issue_invitations(executive,row,'دعوات داخل قاعدة عرض معزولة دون إرسال خارجي',row.version);row.refresh_from_db()
+            invite=ops.live_roster(row).people.get(member=members[0]).invitation
+            ops.respond(invite,'confirm',members[0].user)
+        self.stdout.write('Created fictional agenda, frozen eligibility and internal invitations; no external message or actual attendance.')

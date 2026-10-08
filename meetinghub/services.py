@@ -58,7 +58,7 @@ def event(scope,user,action,reason,details):
     stream=AuditStream.objects.select_for_update().get(pk=stream.pk)
     previous=stream.events.order_by('-pk').first();previous=previous.digest if previous else ''
     at=timezone.now();reason=reason_required(reason)
-    digest=hashlib.sha256(digest_payload(scope,user.pk,action,reason,details,at,previous).encode()).hexdigest()
+    digest=hashlib.sha256(digest_payload(scope,user.pk if user else None,action,reason,details,at,previous).encode()).hexdigest()
     return Event.objects.create(stream=stream,actor=user,action=action,reason=reason,details=details,created_at=at,previous_hash=previous,digest=digest)
 
 def verify_chain(scope):
@@ -124,7 +124,7 @@ def archive_committee(user,committee,archived,reason):
     event(f'committee:{committee.pk}',user,'أرشفة لجنة' if archived else 'استرجاع لجنة',reason,{'archived':archived})
     return committee
 
-MEETING_FIELDS=['committee','kind','mode','starts_at','ends_at','venue','connection_url','rsvp_deadline','quorum_percent','quorum_reference','allow_proxy','proxy_limit','secrecy']
+MEETING_FIELDS=['committee','kind','mode','starts_at','ends_at','venue','connection_url','rsvp_deadline','quorum_percent','quorum_reference','allow_proxy','proxy_limit','secrecy','final_reminder_hours','meeting_reminder_hours']
 def snapshot(row):
     return {'number':row.meeting.number,'name':row.meeting.name,'committee':row.committee_id,'starts_at':row.starts_at.isoformat(),'ends_at':row.ends_at.isoformat(),'rsvp_deadline':row.rsvp_deadline.isoformat(),'kind':row.kind,'mode':row.mode,'venue':row.venue,'connection_url':row.connection_url,'quorum_percent':str(row.quorum_percent),'quorum_reference':row.quorum_reference,'allow_proxy':row.allow_proxy,'proxy_limit':row.proxy_limit,'secrecy':row.secrecy,'status':row.status,'archived':row.archived,'version':row.version,'invitees':list(row.invitees.values_list('pk',flat=True))}
 
@@ -141,6 +141,10 @@ def save_meeting(user,data,invitees,instance=None,reason='',version=None,legacy=
     if not committee or not can_manage(user,committee):raise PermissionDenied('إنشاء الاجتماع وتعديله لرئيس اللجنة وأمينها أو الإدارة التنفيذية.')
     if not committee.active:raise ValidationError('اللجنة غير نشطة.')
     before=snapshot(row) if instance else {}
+    if instance and row.roster_generation:
+        frozen=['committee','starts_at','ends_at','rsvp_deadline','quorum_percent','quorum_reference','allow_proxy','proxy_limit','secrecy','final_reminder_hours','meeting_reminder_hours']
+        if any(k in data and data[k]!=getattr(row,k) for k in frozen) or set(m.pk for m in invitees)!=set(row.invitees.values_list('pk',flat=True)):
+            raise ValidationError('أبطل الدعوات وسجل الأهلية قبل تغيير الموعد أو النصاب أو المدعوين؛ ثم أعد إصدارها.')
     for key in MEETING_FIELDS:
         if key in data:setattr(row,key,data[key])
     day=timezone.localtime(row.starts_at).date()
@@ -189,11 +193,17 @@ def meeting_action(user,record,action,reason,version):
         if not row.archived and row.status!='cancelled':raise ValidationError('الاجتماع ليس مؤرشفًا أو ملغى.')
         row.archived=False;row.status='draft'
     else:raise ValidationError('إجراء غير متاح في المرحلة الأولى.')
+    if action in ['cancel','archive','restore']:
+        Invitation.objects.filter(eligibility__roster__meeting=row,revoked_at__isnull=True).update(revoked_at=timezone.now())
+        Reminder.objects.filter(invitation__eligibility__roster__meeting=row,delivered_at__isnull=True,cancelled_at__isnull=True).update(cancelled_at=timezone.now())
     row.version+=1;row.save()
     event(f'meeting:{row.pk}',user,'إجراء اجتماع: '+action,reason,{'before':before,'after':snapshot(row)})
     return row
 
 def quorum(record):
+    from .session_services import quorum as frozen_quorum
+    result=frozen_quorum(record)
+    if result:return result
     day=timezone.localtime(record.starts_at).date()
     people=active_members(day).filter(committees=record.committee).exclude(role=MemberRole.OBSERVER).distinct()
     count=people.count()

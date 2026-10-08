@@ -1,9 +1,9 @@
 {
   "openapi": "3.0.3",
   "info": {
-    "title": "Meeting foundation — phase 1",
-    "version": "0.1.0",
-    "description": "Member and committee roles do not grant task approval. OTP, RSVP, voting and minutes are later phases. Session writes require CSRF; OAuth requires write scope."
+    "title": "Meeting governance — phases 1 and 2",
+    "version": "0.2.0",
+    "description": "Agenda revisions, invitations, frozen eligibility, actual attendance, proxies and internal reminders. Session writes require CSRF. Task approval roles are independent. External sending, votes and minutes remain later phases."
   },
   "security": [
     {
@@ -566,6 +566,155 @@
           },
           "404": {
             "description": "Not visible"
+          }
+        }
+      }
+    },
+    "/api/governance-meetings/{id}/agenda/": {
+      "get": {
+        "summary": "GET published revision filtered by secrecy; managers also see draft. POST action save/publish/order/remove requires reason and current meeting version; read requires current agenda revision.",
+        "responses": {
+          "200": {
+            "description": "Authorized result"
+          },
+          "400": {
+            "description": "Invalid input, stale version or lifecycle"
+          },
+          "403": {
+            "description": "Role denied"
+          },
+          "404": {
+            "description": "Outside scoped access"
+          }
+        }
+      },
+      "post": {
+        "summary": "GET published revision filtered by secrecy; managers also see draft. POST action save/publish/order/remove requires reason and current meeting version; read requires current agenda revision.",
+        "responses": {
+          "200": {
+            "description": "Authorized result"
+          },
+          "400": {
+            "description": "Invalid input, stale version or lifecycle"
+          },
+          "403": {
+            "description": "Role denied"
+          },
+          "404": {
+            "description": "Outside scoped access"
+          }
+        }
+      }
+    },
+    "/api/governance-meetings/{id}/attendance/": {
+      "get": {
+        "summary": "GET own invitation and attendance (managers all) plus aggregate quorum. POST action issue/reset requires reason/version; revoke reason/invitation; mark reason/eligibility/status/verification; respond own answer. Issue returns one-time fragment links with Cache-Control no-store; internal delivery only.",
+        "responses": {
+          "200": {
+            "description": "Authorized result"
+          },
+          "400": {
+            "description": "Invalid input, stale version or lifecycle"
+          },
+          "403": {
+            "description": "Role denied"
+          },
+          "404": {
+            "description": "Outside scoped access"
+          }
+        }
+      },
+      "post": {
+        "summary": "GET own invitation and attendance (managers all) plus aggregate quorum. POST action issue/reset requires reason/version; revoke reason/invitation; mark reason/eligibility/status/verification; respond own answer. Issue returns one-time fragment links with Cache-Control no-store; internal delivery only.",
+        "responses": {
+          "200": {
+            "description": "Authorized result"
+          },
+          "400": {
+            "description": "Invalid input, stale version or lifecycle"
+          },
+          "403": {
+            "description": "Role denied"
+          },
+          "404": {
+            "description": "Outside scoped access"
+          }
+        }
+      }
+    },
+    "/api/governance-meetings/{id}/files/": {
+      "post": {
+        "summary": "Multipart POST file, reason, version, optional item and purpose agenda/proxy. Protected encrypted upload. Returns id, sha256 and authorized download URL.",
+        "responses": {
+          "200": {
+            "description": "Authorized result"
+          },
+          "400": {
+            "description": "Invalid input, stale version or lifecycle"
+          },
+          "403": {
+            "description": "Role denied"
+          },
+          "404": {
+            "description": "Outside scoped access"
+          }
+        }
+      }
+    },
+    "/api/governance-meetings/{id}/proxies/": {
+      "post": {
+        "summary": "POST principal/delegate eligibility IDs, document ID, valid_until, explicit attendance_allowed/voting_allowed and reason. Revoke action with proxy and reason. Same current roster, no self/observer/chain, proxy limit enforced.",
+        "responses": {
+          "200": {
+            "description": "Authorized result"
+          },
+          "400": {
+            "description": "Invalid input, stale version or lifecycle"
+          },
+          "403": {
+            "description": "Role denied"
+          },
+          "404": {
+            "description": "Outside scoped access"
+          }
+        }
+      }
+    },
+    "/meetings/rsvp/": {
+      "get": {
+        "security": [],
+        "summary": "Public no-account bootstrap. Fragment token is cleared and submitted by CSRF-protected POST. No agenda or participant list.",
+        "responses": {
+          "200": {
+            "description": "No-store, no-referrer form"
+          }
+        }
+      },
+      "post": {
+        "security": [],
+        "summary": "token (43 chars), optional answer confirm/decline/proxy, csrfmiddlewaretoken; capability expires at RSVP deadline and can be revoked.",
+        "responses": {
+          "200": {
+            "description": "Own invitation or generic invalid-link error"
+          },
+          "403": {
+            "description": "CSRF denied"
+          },
+          "429": {
+            "description": "Rate limit"
+          }
+        }
+      }
+    },
+    "/meetings/files/{id}/": {
+      "get": {
+        "summary": "Authorized encrypted attachment download, no-store and audit.",
+        "responses": {
+          "200": {
+            "description": "File"
+          },
+          "404": {
+            "description": "Not authorized or unavailable"
           }
         }
       }

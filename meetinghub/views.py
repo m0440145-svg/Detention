@@ -3,6 +3,7 @@ from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ValidationError,PermissionDenied
 from django.shortcuts import render,redirect,get_object_or_404
 from django.utils import timezone
+from django.db.models import F
 from core.models import Meeting
 from .models import *
 from .forms import MemberForm,CommitteeForm,MeetingForm,ActionForm
@@ -17,9 +18,10 @@ def listing(request):
     if request.GET.get('q'):records=records.filter(meeting__name__icontains=request.GET['q'])
     if request.GET.get('committee','').isdigit():records=records.filter(committee_id=request.GET['committee'])
     if request.GET.get('status') in ['draft','scheduled','cancelled']:records=records.filter(status=request.GET['status'])
+    personal=Invitation.objects.filter(eligibility__member__user=request.user,eligibility__roster__meeting__in=records,eligibility__roster__generation=F('eligibility__roster__meeting__roster_generation'),revoked_at__isnull=True).select_related('eligibility__roster__meeting__meeting').order_by('eligibility__roster__meeting__starts_at')
     from django.core.paginator import Paginator
     committees=services.committees_for(request.user)
-    return render(request,'meetinghub/list.html',{'rows':Paginator(records,25).get_page(request.GET.get('page')),'committees':committees,'may_create':any(services.can_manage(request.user,c) for c in committees),'legacy':Meeting.objects.filter(governance__isnull=True) if request.user.role in ['executive','assistant'] else Meeting.objects.none(),'archived':archived})
+    return render(request,'meetinghub/list.html',{'personal':personal,'rows':Paginator(records,25).get_page(request.GET.get('page')),'committees':committees,'may_create':any(services.can_manage(request.user,c) for c in committees),'legacy':Meeting.objects.filter(governance__isnull=True) if request.user.role in ['executive','assistant'] else Meeting.objects.none(),'archived':archived})
 
 @login_required
 def compose(request,pk=None):

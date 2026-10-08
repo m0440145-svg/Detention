@@ -81,6 +81,10 @@ class MeetingRecord(models.Model):
     status=models.CharField(max_length=20,choices=[('draft','مسودة'),('scheduled','مجدول'),('cancelled','ملغى')],default='draft',db_index=True)
     archived=models.BooleanField(default=False,db_index=True)
     version=models.PositiveIntegerField(default=1)
+    agenda_version=models.PositiveIntegerField(default=0)
+    roster_generation=models.PositiveIntegerField(default=0)
+    final_reminder_hours=models.PositiveSmallIntegerField(default=6,validators=[MinValueValidator(1),MaxValueValidator(168)])
+    meeting_reminder_hours=models.PositiveSmallIntegerField(default=24,validators=[MinValueValidator(1),MaxValueValidator(168)])
     created_by=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,related_name='+')
     created_at=models.DateTimeField(auto_now_add=True)
     updated_at=models.DateTimeField(auto_now=True)
@@ -106,7 +110,7 @@ class AuditStream(models.Model):
 
 class Event(models.Model):
     stream=models.ForeignKey(AuditStream,on_delete=models.PROTECT,related_name='events')
-    actor=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT)
+    actor=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,null=True,blank=True)
     action=models.CharField(max_length=150)
     reason=models.TextField()
     details=models.JSONField(default=dict)
@@ -118,3 +122,5 @@ class Event(models.Model):
         if self.pk:raise ValidationError('سجل الاجتماعات لا يقبل التعديل.')
         return super().save(*args,**kwargs)
     def delete(self,*args,**kwargs):raise ValidationError('سجل الاجتماعات لا يقبل الحذف.')
+
+from .session_models import *

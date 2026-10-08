@@ -49,6 +49,8 @@ class MeetingForm(forms.Form):
     quorum_reference=forms.CharField(label='مرجع النسبة من النظام الأساسي / اللائحة المعتمدة',max_length=250)
     allow_proxy=forms.BooleanField(label='السماح بالتوكيل',required=False)
     proxy_limit=forms.IntegerField(label='الحد المسموح للتوكيلات (صفر عند تعطيلها)',min_value=0,max_value=65535,initial=0)
+    final_reminder_hours=forms.IntegerField(label='التذكير الأخير قبل مهلة التأكيد بساعات',min_value=1,max_value=168,initial=6)
+    meeting_reminder_hours=forms.IntegerField(label='تذكير قبل الاجتماع بساعات',min_value=1,max_value=168,initial=24)
     secrecy=forms.ChoiceField(label='مستوى السرية',choices=MeetingRecord._meta.get_field('secrecy').choices)
     invitees=forms.ModelMultipleChoiceField(label='المدعوون — من أعضاء اللجنة فقط',queryset=Member.objects.none())
     reason=forms.CharField(label='سبب الإنشاء أو التعديل',widget=forms.Textarea(attrs={'rows':2}))
@@ -67,3 +69,44 @@ class ActionForm(forms.Form):
     action=forms.ChoiceField(label='الإجراء',choices=[('schedule','جدولة الاجتماع'),('cancel','إلغاء الاجتماع'),('archive','أرشفة / حذف منطقي'),('restore','استرجاع إلى مسودة')])
     reason=forms.CharField(label='سبب الإجراء')
     version=forms.IntegerField(widget=forms.HiddenInput())
+
+class AgendaForm(forms.ModelForm):
+    reason=forms.CharField(label='سبب الإضافة أو التعديل',widget=forms.Textarea(attrs={'rows':2}))
+    version=forms.IntegerField(widget=forms.HiddenInput())
+    class Meta:
+        model=AgendaItem
+        fields=['title','kind','duration','presenter','owner','parent','link','previous_decision','notes']
+        labels={'title':'عنوان البند','kind':'نوع البند','duration':'المدة بالدقائق','presenter':'المقدم','owner':'المسؤول','parent':'البند الرئيسي (اختياري)','link':'رابط HTTPS','previous_decision':'قرار سابق مرتبط','notes':'الملاحظات'}
+    def __init__(self,*args,record,user,**kwargs):
+        super().__init__(*args,**kwargs)
+        self.fields['version'].initial=record.version
+        self.fields['presenter'].queryset=record.invitees.all();self.fields['owner'].queryset=record.invitees.all()
+        self.fields['parent'].queryset=record.agenda_items.filter(removed=False).exclude(pk=self.instance.pk)
+        from core.views import decisions_for
+        self.fields['previous_decision'].queryset=decisions_for(user)
+
+class AttendanceForm(forms.Form):
+    eligibility=forms.ModelChoiceField(label='المدعو',queryset=Eligibility.objects.none())
+    status=forms.ChoiceField(label='حالة الحضور الفعلي',choices=Attendance._meta.get_field('status').choices)
+    verification=forms.CharField(label='طريقة التحقق (حضوري / منصة اتصال / سجل دخول)')
+    reason=forms.CharField(label='سبب التسجيل أو التحديث')
+    def __init__(self,*args,record,**kwargs):
+        super().__init__(*args,**kwargs)
+        self.fields['eligibility'].queryset=Eligibility.objects.filter(roster__meeting=record,roster__generation=record.roster_generation,invited=True).select_related('member__user')
+        self.fields['eligibility'].label_from_instance=lambda p:p.name
+
+class ProxyForm(forms.Form):
+    principal=forms.ModelChoiceField(label='الموكل',queryset=Eligibility.objects.none())
+    delegate=forms.ModelChoiceField(label='الوكيل',queryset=Eligibility.objects.none())
+    document=forms.ModelChoiceField(label='وثيقة التوكيل المرفوعة',queryset=MeetingFile.objects.none())
+    valid_until=forms.DateTimeField(label='نهاية صلاحية التوكيل — الرياض',widget=forms.DateTimeInput(attrs={'type':'datetime-local'},format='%Y-%m-%dT%H:%M'))
+    attendance_allowed=forms.BooleanField(label='يجيز الاحتساب للنصاب وفق لائحة الجهة',required=False)
+    voting_allowed=forms.BooleanField(label='يجيز التصويت وفق لائحة الجهة (التصويت في المرحلة الثالثة)',required=False)
+    reason=forms.CharField(label='سبب اعتماد التوكيل / مرجعه')
+    def __init__(self,*args,record,**kwargs):
+        super().__init__(*args,**kwargs)
+        qs=Eligibility.objects.filter(roster__meeting=record,roster__generation=record.roster_generation,invited=True,quorum_eligible=True)
+        for k in ['principal','delegate']:
+            self.fields[k].queryset=qs;self.fields[k].label_from_instance=lambda p:p.name
+        self.fields['document'].queryset=record.files.filter(purpose='proxy');self.fields['document'].label_from_instance=lambda f:f.name
+        self.fields['valid_until'].initial=record.ends_at

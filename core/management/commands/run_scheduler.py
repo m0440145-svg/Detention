@@ -22,6 +22,9 @@ class Command(BaseCommand):
                 poll_hr();schedule_notifications();deliver_pending()
                 from correspondence.reports import run_schedules
                 run_schedules()
+                from meetinghub.session_services import run_reminders
+                meeting_reminders=run_reminders()
+                if meeting_reminders:self.stdout.write(f"Meeting internal reminders: {meeting_reminders}")
                 if extracted: self.stdout.write(f'Extraction jobs completed: {extracted}')
                 self.stdout.write(f'{timezone.localtime().isoformat()} rules evaluated; new escalations: {count}')
                 self.stdout.flush()

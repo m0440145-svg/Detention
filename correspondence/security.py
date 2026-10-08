@@ -92,7 +92,7 @@ class SecurityMiddleware:
         request.ui_language=request.session.get("ui_language","ar")
         if request.user.is_authenticated:
             request.user.ui_language=request.ui_language
-            if settings.MFA_REQUIRED and not request.session.get('mfa_verified') and not request.path.startswith(('/security/','/logout/','/api/auth/logout/')):
+            if settings.MFA_REQUIRED and not request.session.get('mfa_verified') and not request.path.startswith(('/security/','/logout/','/api/auth/logout/','/meetings/rsvp/')):
                 # OAuth bearer requests are validated separately by the API authenticator.
                 if not request.META.get('HTTP_AUTHORIZATION','').startswith('Bearer '):
                     if request.path.startswith('/api/'):return JsonResponse({'detail':'MFA required'},status=403)

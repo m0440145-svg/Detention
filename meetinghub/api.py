@@ -117,3 +117,47 @@ class MeetingViewSet(viewsets.ModelViewSet):
     def events(self,request,pk=None):
         row=self.get_object();scope=f'meeting:{row.pk}'
         return Response({'chain_valid':services.verify_chain(scope),'events':list(Event.objects.filter(stream__scope=scope).values('id','actor_id','action','reason','details','created_at','previous_hash','digest'))})
+    @action(detail=True,methods=['get','post'])
+    def agenda(self,request,pk=None):
+        from . import session_services as ops,session_api
+        row=self.get_object()
+        if request.method=='POST':return Response(session_api.agenda_post(request.user,row,request.data))
+        version=request.query_params.get('revision',row.agenda_version)
+        if not str(version).isdigit():raise serializers.ValidationError('رقم إصدار غير صالح.')
+        revision=row.agenda_revisions.filter(version=version).first()
+        return Response({'version':revision.version if revision else None,'digest':revision.digest if revision else None,'items':ops.revision_items(request.user,row,revision) if revision else [],'draft':[{'id':i.pk,'title':i.title,'parent':i.parent_id,'position':i.position,'duration':i.duration} for i in ops.draft_items(request.user,row)] if services.can_manage(request.user,row.committee) else []})
+    @action(detail=True,methods=['get','post'])
+    def attendance(self,request,pk=None):
+        from . import session_services as ops,session_api
+        row=self.get_object()
+        if request.method=='POST':
+            result=session_api.attendance_post(request.user,row,request.data)
+            for link in result.get('links',[]):link['url']=request.build_absolute_uri('/meetings/rsvp/')+'#'+link.pop('token')
+            response=Response(result);response['Cache-Control']='no-store';return response
+        roster=ops.live_roster(row);people=[]
+        if roster:
+            qs=roster.people.filter(invited=True).select_related('member__user','attendance','invitation')
+            if not services.can_manage(request.user,row.committee):qs=qs.filter(member__user=request.user)
+            for p in qs:
+                a=getattr(p,'attendance',None);i=getattr(p,'invitation',None)
+                people.append({'eligibility':p.pk,'name':p.name,'quorum_eligible':p.quorum_eligible,'voting_eligible':p.voting_eligible,'response':i.response if i else None,'attendance':a.status if a else None,'entered_at':a.entered_at if a else None,'exited_at':a.exited_at if a else None})
+        return Response({'quorum':services.quorum(row),'people':people})
+    @action(detail=True,methods=['post'])
+    def files(self,request,pk=None):
+        from . import session_services as ops
+        from django.shortcuts import get_object_or_404
+        row=self.get_object();services.require_manage(request.user,row);version=serializers.IntegerField().run_validation(request.data.get('version'))
+        if not request.FILES.get('file'):raise serializers.ValidationError('اختر مرفقًا.')
+        item=get_object_or_404(row.agenda_items,pk=request.data['item']) if request.data.get('item') else None
+        f=ops.upload_file(request.user,row,request.FILES['file'],request.data.get('reason',''),version,item,request.data.get('purpose','agenda'))
+        return Response({'id':f.pk,'sha256':f.sha256,'url':f'/meetings/files/{f.pk}/'},status=201)
+    @action(detail=True,methods=['post'])
+    def proxies(self,request,pk=None):
+        from . import session_services as ops,session_api
+        row=self.get_object()
+        services.require_manage(request.user,row)
+        if request.data.get('action')=='revoke':
+            from django.shortcuts import get_object_or_404
+            ops.revoke_proxy(request.user,row,get_object_or_404(Proxy,pk=request.data.get('proxy')),request.data.get('reason',''));return Response({'revoked':True})
+        s=session_api.ProxyInput(data=request.data);s.is_valid(raise_exception=True)
+        proxy=ops.approve_proxy(request.user,row,**s.validated_data);return Response({'proxy':proxy.pk},status=201)
