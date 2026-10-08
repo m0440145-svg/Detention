@@ -190,7 +190,8 @@ class AcceptanceTests(TestCase):
                 response=self.client.get(url); self.assertEqual(response.status_code,200,f'{user.role}: {url}')
         self.client.force_login(self.executive)
         for kind,label in REPORTS: self.assertEqual(self.client.get('/reports/?report='+kind).status_code,200,kind)
-        for url in ['/tasks/new/','/manage/meeting/new/','/manage/decision/new/',f'/tasks/{t.pk}/edit/']:
+        self.assertRedirects(self.client.get('/manage/meeting/new/'),'/meetings/new/',fetch_redirect_response=False)
+        for url in ['/tasks/new/','/manage/decision/new/',f'/tasks/{t.pk}/edit/']:
             self.assertEqual(self.client.get(url).status_code,200,url)
     def test_seed_has_required_arabic_data(self):
         from django.core.management import call_command

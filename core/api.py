@@ -183,11 +183,12 @@ class MeetingViewSet(viewsets.ModelViewSet):
     serializer_class=MeetingSerializer
     http_method_names=['get','post','patch','put','head','options']
     def get_queryset(self):
-        return Meeting.objects.all() if self.request.user.role in GLOBAL_ROLES else Meeting.objects.filter(decisions__in=decisions_for(self.request.user)).distinct()
+        return Meeting.objects.filter(governance__isnull=True) if self.request.user.role in GLOBAL_ROLES else Meeting.objects.filter(governance__isnull=True,decisions__in=decisions_for(self.request.user)).distinct()
     def perform_create(self,serializer): self.write(serializer)
     def perform_update(self,serializer): self.write(serializer)
     def write(self,serializer):
         if self.request.user.role not in GLOBAL_ROLES: raise APIPermissionDenied()
+        if serializer.instance is None:raise APIValidationError('إنشاء الاجتماعات الجديدة عبر /api/governance-meetings/ مع المدعوين والنصاب الإلزامي.')
         meeting=serializer.save(); services.audit(None,self.request.user,'حفظ اجتماع',new={'id':meeting.pk})
 class NotificationSerializer(serializers.ModelSerializer):
     class Meta: model=Notification; fields=['id','task','text','read','created_at']; read_only_fields=['id','task','text','created_at']

@@ -284,6 +284,8 @@ def save_decision(user,data,instance=None,reason='',minutes_file=None):
     old={} if creating else decision_snapshot(decision)
     if not creating and not reason.strip(): raise ValidationError('سبب تعديل القرار مطلوب.')
     for key,value in data.items(): setattr(decision,key,value)
+    from meetinghub.models import MeetingRecord
+    if MeetingRecord.objects.filter(meeting_id=decision.meeting_id,secrecy='secret').exists():raise ValidationError('ربط قرار باجتماع سري يحتاج امتداد صلاحيات السرية في المرحلة الرابعة.')
     if not decision.followup_owner.is_active or decision.followup_owner.role in {Role.ADMIN,Role.VIEWER,Role.BOARD}: raise ValidationError('مسؤول متابعة القرار يجب أن يكون حسابًا نشطًا له صلاحية التنفيذ.')
     if not decision.issuing_authority or not decision.due_date: raise ValidationError('الجهة المصدرة وتاريخ استحقاق القرار مطلوبان.')
     if minutes_file and not decision.approved_minutes_number.strip(): raise ValidationError('أدخل رقم المحضر المعتمد مع مرفقه.')

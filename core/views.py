@@ -208,7 +208,7 @@ def decisions(request):
         metrics=decision_metrics(request.user,decision)
         decision.visible_progress=metrics['progress']; decision.visible_approved_progress=metrics['approved_progress']
         rows.append(decision)
-    return render(request,'core/decisions.html',{'decisions':rows,'manage':request.user.role in GLOBAL_ROLES,'full_scope':request.user.role in DECISION_READ_ROLES,'meetings':Meeting.objects.all() if request.user.role in GLOBAL_ROLES else Meeting.objects.filter(decisions__in=decisions_for(request.user)).distinct()})
+    return render(request,'core/decisions.html',{'decisions':rows,'manage':request.user.role in GLOBAL_ROLES,'full_scope':request.user.role in DECISION_READ_ROLES,'meetings':Meeting.objects.exclude(governance__secrecy='secret') if request.user.role in GLOBAL_ROLES else Meeting.objects.filter(decisions__in=decisions_for(request.user)).distinct()})
 @login_required
 def decision_detail(request,pk):
     require_operational(request.user)
@@ -227,6 +227,16 @@ def decision_detail(request,pk):
 def generic_form(request,kind,pk=None):
     definitions={'unit':(Unit,UnitForm,'وحدة تنظيمية'),'employee':(User,EmployeeForm,'موظف'),'meeting':(Meeting,MeetingForm,'اجتماع'),'decision':(Decision,DecisionForm,'قرار اجتماع')}
     if kind not in definitions: raise Http404()
+    if kind=='meeting':
+        if not pk:
+            if request.user.role not in GLOBAL_ROLES:raise PermissionDenied()
+            return redirect('meeting-new')
+        from meetinghub.models import MeetingRecord
+        expanded=MeetingRecord.objects.filter(meeting_id=pk).first()
+        if expanded:
+            from meetinghub.services import records_for
+            get_object_or_404(records_for(request.user,True),pk=expanded.pk)
+            return redirect('meeting-edit',pk=expanded.pk)
     if kind in ['unit','employee'] and __import__('correspondence.models',fromlist=['Integration']).Integration.objects.filter(kind='hr',active=True).exists(): raise PermissionDenied('بيانات الموظفين والوحدات تأتي من الموارد البشرية؛ الإدارة اليدوية موقوفة أثناء الربط.')
     if kind in ['unit','employee'] and request.user.role!=Role.ADMIN: raise PermissionDenied()
     if kind in ['meeting','decision'] and request.user.role not in GLOBAL_ROLES: raise PermissionDenied()

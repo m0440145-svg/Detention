@@ -87,6 +87,7 @@ class DecisionForm(forms.ModelForm):
         widgets={key:forms.DateInput(attrs={'type':'date'}) for key in ['date','due_date']}
     def __init__(self,*args,**kwargs):
         super().__init__(*args,**kwargs)
+        self.fields['meeting'].queryset=Meeting.objects.exclude(governance__secrecy='secret')
         self.fields['issuing_authority'].required=True; self.fields['due_date'].required=True
         self.fields['reason'].required=bool(self.instance.pk)
         self.fields['followup_owner'].queryset=User.objects.filter(is_active=True).exclude(role__in=[Role.ADMIN,Role.VIEWER])
