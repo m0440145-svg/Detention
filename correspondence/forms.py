@@ -2,6 +2,14 @@ from django import forms
 from core.models import User,Role,Unit
 from .models import *
 from .services import visible
+from .templatetags.mail_ui import TRANSLATIONS
+
+def localize(form,user):
+    if getattr(user,"ui_language","ar")=="en":
+        for name,field in form.fields.items():
+            field.label=TRANSLATIONS.get(str(field.label),str(field.label))
+            if isinstance(field,forms.ChoiceField) and not isinstance(field,forms.ModelChoiceField):field.choices=[(key,TRANSLATIONS.get(str(label),str(label))) for key,label in field.choices]
+
 
 class MailForm(forms.ModelForm):
     attachment=forms.FileField(label='المرفق الأساسي',required=False)
@@ -10,7 +18,7 @@ class MailForm(forms.ModelForm):
     cc=forms.ModelMultipleChoiceField(label='نسخة إلى',queryset=User.objects.none(),required=False)
     class Meta:
         model=Correspondence
-        fields=['kind','subject','party','external_number','original_date','unit','owner','classification','secrecy','priority','channel','source_platform','external_deadline','related','decision','template','signer','route','body','no_attachments']
+        fields=['kind','subject','party','external_number','original_date','unit','owner','classification','secrecy','priority','channel','source_platform','external_deadline','related','decision','template','signer','route','body','rich_text','summary','project_reference','program_reference','personal_data','no_attachments']
         labels={'kind':'نوع المراسلة','subject':'الموضوع','party':'الجهة الخارجية / الداخلية','external_number':'رقم الخطاب الأصلي (للوارد)','original_date':'تاريخ الخطاب الأصلي','unit':'الوحدة القائدة','owner':'المسؤول','classification':'التصنيف وفئة الاستبقاء','secrecy':'درجة السرية','priority':'الأولوية','channel':'وسيلة الاستلام / الإرسال','source_platform':'المنصة المصدر','external_deadline':'مهلة الجهة المرسلة إن وجدت','related':'المراسلة المرتبطة','decision':'القرار المرتبط','template':'قالب الصادر','signer':'الموقّع المعتمد','route':'مسار الاعتماد','body':'نص المراسلة','no_attachments':'تأكيد بدون مرفقات'}
         widgets={'original_date':forms.DateInput(attrs={'type':'date'}),'external_deadline':forms.DateTimeInput(attrs={'type':'datetime-local'}),'body':forms.Textarea(attrs={'rows':5})}
     def __init__(self,*args,user,**kwargs):
@@ -25,6 +33,7 @@ class MailForm(forms.ModelForm):
         if user.role not in [Role.EXECUTIVE,Role.ASSISTANT]: self.fields['unit'].queryset=user.units.filter(active=True)
         if user.role!=Role.EXECUTIVE:
             self.fields['secrecy'].choices=[p for p in Secrecy.choices if p[0]!=Secrecy.SECRET]
+        localize(self,user)
         self.fields['reason'].required=bool(self.instance.pk)
         if self.instance.pk:
             self.fields['kind'].disabled=True
@@ -43,7 +52,7 @@ class ReferralForm(forms.Form):
         self.fields['recipients'].queryset=users
 
 class ActionForm(forms.Form):
-    action=forms.ChoiceField(label='الإجراء',choices=[('submit','تقديم للتدقيق'),('review','إنهاء التدقيق'),('approve','اعتماد المستوى الحالي'),('reject','إعادة للتصحيح'),('sign','إثبات توقيع داخلي وإصدار الرقم'),('send','إثبات إرسال يدوي'),('receive','إثبات استلام'),('start','بدء المعالجة'),('pause','انتظار جهة خارجية وإيقاف SLA'),('resume','استئناف SLA'),('done','إنجاز الوارد'),('archive','أرشفة'),('cancel','إلغاء بمبرر')])
+    action=forms.ChoiceField(label='الإجراء',choices=[('submit-incoming-approval','إرسال الوارد للاعتماد'),('suspend','تعليق بمبرر'),('unsuspend','استئناف معالجة المعلق'),('done-override','إغلاق الوارد باستثناء تنفيذي'),('submit','تقديم للتدقيق'),('review','إنهاء التدقيق'),('approve','اعتماد المستوى الحالي'),('reject','إعادة للتصحيح'),('sign','إثبات توقيع داخلي وإصدار الرقم'),('send','إثبات إرسال يدوي'),('receive','إثبات استلام'),('start','بدء المعالجة'),('pause','انتظار جهة خارجية وإيقاف SLA'),('resume','استئناف SLA'),('done','إنجاز الوارد'),('archive','أرشفة'),('cancel','إلغاء بمبرر')])
     reason=forms.CharField(label='سبب الإجراء',widget=forms.Textarea(attrs={'rows':2}))
     evidence=forms.CharField(label='مرجع دليل التوقيع أو الإرسال/الاستلام (عند الحاجة)',required=False)
 

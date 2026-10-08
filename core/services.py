@@ -159,6 +159,8 @@ def resolve_obstacle(user,obstacle,resolution):
     audit(task,user,'معالجة العائق',{'status':old},{'status':task.status,'obstacle':obstacle.pk,'resolution':resolution})
     notify(task,f'{task.code}: تمت معالجة العائق')
 def validate_upload(upload):
+    from correspondence.security import scan_upload
+    scan_upload(upload)
     extension=Path(upload.name).suffix.lower()
     if upload.size>10*1024*1024: raise ValidationError('الحد الأعلى للملف 10 ميجابايت.')
     if extension not in {'.pdf','.png','.jpg','.jpeg','.docx','.xlsx','.csv','.txt'}: raise ValidationError('نوع الملف غير مسموح. استخدم PDF أو PNG/JPG أو DOCX/XLSX أو CSV/TXT.')

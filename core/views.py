@@ -24,7 +24,12 @@ def signin(request):
         try:
             user=authenticate_attempt(request,request.POST.get('username',''),request.POST.get('password',''))
             if user:
+                from correspondence.security import check_login_factor
+                if not check_login_factor(request,user,request.POST.get("otp","")):
+                    if request.session.get("mfa_enroll_user"): return redirect("/security/enroll/")
+                    return render(request,"core/login.html",{"error":"رمز المصادقة المتعددة غير صحيح."})
                 login(request,user)
+                request.session["mfa_verified"]=True
                 services.audit(None,user,'تسجيل دخول ناجح')
                 return redirect('dashboard')
             error='بيانات الدخول غير صحيحة أو الحساب غير نشط.'
@@ -222,6 +227,7 @@ def decision_detail(request,pk):
 def generic_form(request,kind,pk=None):
     definitions={'unit':(Unit,UnitForm,'وحدة تنظيمية'),'employee':(User,EmployeeForm,'موظف'),'meeting':(Meeting,MeetingForm,'اجتماع'),'decision':(Decision,DecisionForm,'قرار اجتماع')}
     if kind not in definitions: raise Http404()
+    if kind in ['unit','employee'] and __import__('correspondence.models',fromlist=['Integration']).Integration.objects.filter(kind='hr',active=True).exists(): raise PermissionDenied('بيانات الموظفين والوحدات تأتي من الموارد البشرية؛ الإدارة اليدوية موقوفة أثناء الربط.')
     if kind in ['unit','employee'] and request.user.role!=Role.ADMIN: raise PermissionDenied()
     if kind in ['meeting','decision'] and request.user.role not in GLOBAL_ROLES: raise PermissionDenied()
     model,klass,label=definitions[kind]
@@ -383,5 +389,7 @@ def api_login(request):
     try: user=authenticate_attempt(request,identifier,password)
     except LoginRateLimited as exc: return JsonResponse({'detail':str(exc)},status=429)
     if not user: return JsonResponse({'detail':'بيانات الدخول غير صحيحة أو الحساب غير نشط.'},status=401)
-    login(request,user); services.audit(None,user,'تسجيل دخول ناجح')
+    from correspondence.security import check_login_factor
+    if not check_login_factor(request,user,data.get('otp','')): return JsonResponse({'detail':'MFA required','enrollment_url':'/security/enroll/'},status=403)
+    login(request,user); request.session['mfa_verified']=True; services.audit(None,user,'تسجيل دخول ناجح')
     return JsonResponse({'id':user.pk,'name':str(user),'role':user.role,'csrf_token':get_token(request)})

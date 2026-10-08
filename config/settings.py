@@ -9,8 +9,8 @@ if not SECRET_KEY:
         raise ImproperlyConfigured('Set SECRET_KEY before starting the application')
     SECRET_KEY = 'development-only-never-use-in-production'
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1,testserver').split(',')
-INSTALLED_APPS = ['django.contrib.admin','django.contrib.auth','django.contrib.contenttypes','django.contrib.sessions','django.contrib.messages','django.contrib.staticfiles','rest_framework','core','correspondence']
-MIDDLEWARE = ['django.middleware.security.SecurityMiddleware','whitenoise.middleware.WhiteNoiseMiddleware','django.contrib.sessions.middleware.SessionMiddleware','django.middleware.common.CommonMiddleware','django.middleware.csrf.CsrfViewMiddleware','django.contrib.auth.middleware.AuthenticationMiddleware','django.contrib.messages.middleware.MessageMiddleware','django.middleware.clickjacking.XFrameOptionsMiddleware']
+INSTALLED_APPS = ['django.contrib.admin','django.contrib.auth','django.contrib.contenttypes','django.contrib.sessions','django.contrib.messages','django.contrib.staticfiles','rest_framework','oauth2_provider','core','correspondence']
+MIDDLEWARE = ['django.middleware.security.SecurityMiddleware','whitenoise.middleware.WhiteNoiseMiddleware','django.contrib.sessions.middleware.SessionMiddleware','django.middleware.common.CommonMiddleware','django.middleware.csrf.CsrfViewMiddleware','django.contrib.auth.middleware.AuthenticationMiddleware','correspondence.security.SecurityMiddleware','django.contrib.messages.middleware.MessageMiddleware','django.middleware.clickjacking.XFrameOptionsMiddleware']
 ROOT_URLCONF = 'config.urls'
 TEMPLATES = [{'BACKEND':'django.template.backends.django.DjangoTemplates','DIRS':[], 'APP_DIRS':True,'OPTIONS':{'context_processors':['django.template.context_processors.request','django.contrib.auth.context_processors.auth','django.contrib.messages.context_processors.messages','core.context.navigation']}}]
 WSGI_APPLICATION = 'config.wsgi.application'
@@ -55,3 +55,15 @@ DEFAULT_AUTO_FIELD = 'django.db.models.AutoField'
 if os.getenv('TRUST_PROXY') == '1':
     # Enable only behind the bundled proxy; never expose the app port publicly.
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+MFA_REQUIRED = os.getenv('MFA_REQUIRED', '0' if DEBUG or 'test' in __import__('sys').argv else '1') == '1'
+SESSION_IDLE_SECONDS = int(os.getenv('SESSION_IDLE_SECONDS', '1800'))
+ADMIN_IP_NETWORKS = [x for x in os.getenv('ADMIN_IP_NETWORKS','').split(',') if x]
+STORAGES = {'default': {'BACKEND': 'correspondence.security.EncryptedStorage'}, 'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'}}
+REST_FRAMEWORK['DEFAULT_AUTHENTICATION_CLASSES'] = ['correspondence.security.ScopedOAuthAuthentication', 'rest_framework.authentication.SessionAuthentication']
+OAUTH2_PROVIDER = {'SCOPES': {'read':'Read authorized records','write':'Write authorized records'}, 'PKCE_REQUIRED': True, 'ACCESS_TOKEN_EXPIRE_SECONDS': 3600, 'REFRESH_TOKEN_EXPIRE_SECONDS': 86400, 'ALLOWED_REDIRECT_URI_SCHEMES':['https']}
+
+PUBLIC_ORIGIN = os.getenv('PUBLIC_ORIGIN', 'https://localhost')
+
+OAUTH2_PROVIDER.update(COMPLIANT_BCP_RFC9700_TOKEN_STORAGE=True, REFRESH_TOKEN_REUSE_PROTECTION=True)
+REST_FRAMEWORK['DEFAULT_THROTTLE_CLASSES'] = ['correspondence.security.DatabaseUserThrottle']

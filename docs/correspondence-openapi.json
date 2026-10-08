@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Ehsan Correspondence API",
-    "version": "1.0.0",
+    "version": "0.3.0",
     "description": "Session-authenticated correspondence module. Cookie session and CSRF required for writes. External OAuth2/SSO/signature integrations are not configured."
   },
   "servers": [
@@ -12,7 +12,12 @@
   ],
   "security": [
     {
-      "session": []
+      "OAuth2": [
+        "read"
+      ]
+    },
+    {
+      "sessionCookie": []
     }
   ],
   "paths": {
@@ -788,11 +793,483 @@
           }
         }
       }
+    },
+    "/api/privacy/": {
+      "get": {
+        "summary": "/api/privacy/",
+        "responses": {
+          "200": {
+            "description": "Scoped result"
+          },
+          "403": {
+            "description": "Permission/scope denied"
+          },
+          "400": {
+            "description": "Validation failed"
+          }
+        }
+      },
+      "post": {
+        "summary": "/api/privacy/",
+        "responses": {
+          "403": {
+            "description": "Permission/scope denied"
+          },
+          "400": {
+            "description": "Validation failed"
+          },
+          "201": {
+            "description": "Subject request created"
+          }
+        },
+        "security": [
+          {
+            "OAuth2": [
+              "write"
+            ]
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string"
+                  },
+                  "case": {
+                    "type": "integer"
+                  },
+                  "retention_action": {
+                    "type": "string",
+                    "enum": [
+                      "destroy",
+                      "permanent"
+                    ]
+                  },
+                  "minutes": {
+                    "type": "string"
+                  },
+                  "mail_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer"
+                    },
+                    "maxItems": 100
+                  },
+                  "recipients": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer"
+                    }
+                  },
+                  "instruction": {
+                    "type": "string"
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "parallel",
+                      "sequential"
+                    ]
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/communications/{id}/retention/": {
+      "post": {
+        "summary": "/api/communications/{id}/retention/",
+        "responses": {
+          "200": {
+            "description": "Scoped result"
+          },
+          "403": {
+            "description": "Permission/scope denied"
+          },
+          "400": {
+            "description": "Validation failed"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "security": [
+          {
+            "OAuth2": [
+              "write"
+            ]
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string"
+                  },
+                  "case": {
+                    "type": "integer"
+                  },
+                  "retention_action": {
+                    "type": "string",
+                    "enum": [
+                      "destroy",
+                      "permanent"
+                    ]
+                  },
+                  "minutes": {
+                    "type": "string"
+                  },
+                  "mail_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer"
+                    },
+                    "maxItems": 100
+                  },
+                  "recipients": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer"
+                    }
+                  },
+                  "instruction": {
+                    "type": "string"
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "parallel",
+                      "sequential"
+                    ]
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/communications-reports/{kind}/": {
+      "get": {
+        "summary": "/api/communications-reports/{kind}/",
+        "responses": {
+          "200": {
+            "description": "Scoped result"
+          },
+          "403": {
+            "description": "Permission/scope denied"
+          },
+          "400": {
+            "description": "Validation failed"
+          }
+        },
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "register",
+                "weekly-overdue",
+                "monthly-unit",
+                "retention",
+                "permissions",
+                "secret-views"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "/api/communications-bulk-referral/": {
+      "post": {
+        "summary": "/api/communications-bulk-referral/",
+        "responses": {
+          "200": {
+            "description": "Scoped result"
+          },
+          "403": {
+            "description": "Permission/scope denied"
+          },
+          "400": {
+            "description": "Validation failed"
+          }
+        },
+        "security": [
+          {
+            "OAuth2": [
+              "write"
+            ]
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string"
+                  },
+                  "case": {
+                    "type": "integer"
+                  },
+                  "retention_action": {
+                    "type": "string",
+                    "enum": [
+                      "destroy",
+                      "permanent"
+                    ]
+                  },
+                  "minutes": {
+                    "type": "string"
+                  },
+                  "mail_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer"
+                    },
+                    "maxItems": 100
+                  },
+                  "recipients": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer"
+                    }
+                  },
+                  "instruction": {
+                    "type": "string"
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "parallel",
+                      "sequential"
+                    ]
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/communications/metrics/": {
+      "get": {
+        "summary": "/api/communications/metrics/",
+        "responses": {
+          "200": {
+            "description": "Scoped result"
+          },
+          "403": {
+            "description": "Permission/scope denied"
+          },
+          "400": {
+            "description": "Validation failed"
+          }
+        }
+      }
+    },
+    "/api/communications/{id}/signature/": {
+      "post": {
+        "summary": "/api/communications/{id}/signature/",
+        "responses": {
+          "403": {
+            "description": "Permission/scope denied"
+          },
+          "400": {
+            "description": "Validation failed"
+          },
+          "202": {
+            "description": "Queued provider signature"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "security": [
+          {
+            "OAuth2": [
+              "write"
+            ]
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string"
+                  },
+                  "case": {
+                    "type": "integer"
+                  },
+                  "retention_action": {
+                    "type": "string",
+                    "enum": [
+                      "destroy",
+                      "permanent"
+                    ]
+                  },
+                  "minutes": {
+                    "type": "string"
+                  },
+                  "mail_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer"
+                    },
+                    "maxItems": 100
+                  },
+                  "recipients": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer"
+                    }
+                  },
+                  "instruction": {
+                    "type": "string"
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "parallel",
+                      "sequential"
+                    ]
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/communications/{id}/revisions/": {
+      "get": {
+        "summary": "/api/communications/{id}/revisions/",
+        "responses": {
+          "200": {
+            "description": "Scoped result"
+          },
+          "403": {
+            "description": "Permission/scope denied"
+          },
+          "400": {
+            "description": "Validation failed"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
+      }
     }
   },
   "components": {
     "securitySchemes": {
       "session": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "sessionid"
+      },
+      "OAuth2": {
+        "type": "oauth2",
+        "flows": {
+          "authorizationCode": {
+            "authorizationUrl": "/o/authorize/",
+            "tokenUrl": "/o/token/",
+            "scopes": {
+              "read": "Read authorized data",
+              "write": "Write authorized data"
+            }
+          }
+        }
+      },
+      "sessionCookie": {
         "type": "apiKey",
         "in": "cookie",
         "name": "sessionid"

@@ -1,0 +1,4 @@
+# Riyadh host timezone; run as postgres. Key via PGBACKREST_REPO1_CIPHER_PASS, not this file.
+0 0 * * * pgbackrest --stanza=ehsan --type=full backup
+0 1-23 * * * pgbackrest --stanza=ehsan --type=incr backup
+# External monitor must alert if newest backup age exceeds 65 minutes or WAL archiving fails.

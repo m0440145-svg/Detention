@@ -26,18 +26,32 @@ def query(request):
         from django.http import QueryDict
         params=QueryDict(mutable=True);params.update(values);request.GET=params
     if request.GET.get('q'): qs=qs.filter(Q(subject__icontains=request.GET['q'])|Q(reference__icontains=request.GET['q'])|Q(external_number__icontains=request.GET['q'])|Q(body__icontains=request.GET['q'])|Q(party__name__icontains=request.GET['q'])|Q(search_text__contains=services.normalize_arabic(request.GET['q'])))
-    for field in ['kind','status','priority','secrecy']:
+    for field in ['kind','status','priority','secrecy','party','classification','project_reference','program_reference']:
         if request.GET.get(field): qs=qs.filter(**{field:request.GET[field]})
     if request.GET.get('unit','').isdigit(): qs=qs.filter(unit_id=request.GET['unit'])
+    for field in ['created_at','due_at']:
+        for side in ['gte','lte']:
+            value=request.GET.get(field+'__'+side)
+            if value:
+                try:
+                    from datetime import date
+                    date.fromisoformat(value)
+                    qs=qs.filter(**{field+'__date__'+side:value})
+                except ValueError:raise ValidationError('تاريخ بحث غير صالح.')
     if request.GET.get('late')=='1': qs=qs.filter(due_at__lt=timezone.now(),paused_at__isnull=True).exclude(status__in=services.TERMINAL)
     return qs
 
 @login_required
 def dashboard(request):
     if request.user.role==Role.ADMIN: return redirect('mail-settings')
-    qs=services.visible(request.user); alerts=MailAlert.objects.filter(recipient=request.user,mail__in=qs).select_related('mail')[:12]
+    qs=services.visible(request.user)
+    board_name={'executive':'لوحة المدير التنفيذي','assistant':'لوحة السكرتارية','head':'لوحة مدير الإدارة'}.get(request.user.role,'لوحة الموظف')
+    from .reports import metrics as performance_metrics
+    performance=performance_metrics(request.user)
+    if request.user.role=='employee':qs=qs.filter(Q(owner=request.user)|Q(referrals__recipient=request.user)).distinct()
+    alerts=MailAlert.objects.filter(recipient=request.user,mail__in=qs).select_related('mail')[:12]
     metrics=[('إجمالي المراسلات',qs.count()),('وارد مفتوح',qs.filter(kind=Kind.IN).exclude(status__in=services.TERMINAL).count()),('بانتظار الاعتماد',qs.filter(status__in=[MailStatus.REVIEW,MailStatus.APPROVAL,MailStatus.SIGNING]).count()),('متأخرة',qs.filter(due_at__lt=timezone.now(),paused_at__isnull=True).exclude(status__in=services.TERMINAL).count())]
-    return render(request,'correspondence/dashboard.html',{'metrics':metrics,'rows':qs[:8],'alerts':alerts})
+    return render(request,'correspondence/dashboard.html',{'metrics':metrics,'rows':qs[:8],'alerts':alerts,'board_name':board_name,'performance':performance})
 
 @login_required
 def listing(request,box='all'):
@@ -116,24 +130,26 @@ def detail(request,pk):
     related_visible=bool(mail.related_id and services.visible(request.user).filter(pk=mail.related_id).exists())
     referrals=list(mail.referrals.select_related('recipient','created_by','task'))
     for row in referrals: row.task_visible=bool(row.task_id and tasks_for(request.user).filter(pk=row.task_id).exists())
-    return render(request,'correspondence/detail.html',{'decision_visible':decision_visible,'related_visible':related_visible,'mail':mail,'body':services.rendered_body(mail),'error':error,'action_form':ActionForm(),'referral_form':ReferralForm(mail=mail),'extend_form':ExtendForm(),'referrals':referrals,'events':mail.events.select_related('actor').order_by('-pk')[:100],'chain_valid':services.verify_chain(mail),'can_manage':services.can_manage(request.user,mail),'can_write':request.user.role not in [Role.ADMIN,Role.VIEWER,Role.BOARD],'can_download':mail.secrecy not in [Secrecy.RESTRICTED,Secrecy.SECRET],'can_edit':mail.status in [MailStatus.DRAFT,MailStatus.REGISTERED,MailStatus.RETURNED]})
+    return render(request,'correspondence/detail.html',{'decision_visible':decision_visible,'related_visible':related_visible,'mail':mail,'body':__import__('correspondence.documents',fromlist=['clean_richtext']).clean_richtext(services.rendered_body(mail)) if mail.rich_text else services.rendered_body(mail),'error':error,'action_form':ActionForm(),'referral_form':ReferralForm(mail=mail),'extend_form':ExtendForm(),'referrals':referrals,'events':mail.events.select_related('actor').order_by('-pk')[:100],'chain_valid':services.verify_chain(mail),'can_manage':services.can_manage(request.user,mail),'can_write':request.user.role not in [Role.ADMIN,Role.VIEWER,Role.BOARD],'can_download':__import__('correspondence.governance',fromlist=['can_export']).can_export(request.user,mail,'download'),'can_edit':mail.status in [MailStatus.DRAFT,MailStatus.REGISTERED,MailStatus.RETURNED]})
 
 @login_required
 def download(request,pk):
     attachment=get_object_or_404(MailAttachment.objects.select_related('mail'),pk=pk)
     if not services.visible(request.user).filter(pk=attachment.mail_id).exists(): raise Http404()
-    if attachment.mail.secrecy in [Secrecy.RESTRICTED,Secrecy.SECRET]: raise PermissionDenied('التنزيل محظور افتراضيًا للمراسلات المقيدة والسرية.')
+    from .governance import can_export
+    if not can_export(request.user,attachment.mail,'download'): raise PermissionDenied('التنزيل محظور افتراضيًا للمراسلات المقيدة والسرية.')
     try: stream=attachment.file.open('rb')
     except FileNotFoundError: raise Http404()
     services.event(attachment.mail,request.user,'تنزيل مرفق','تنزيل مصرح',new={'attachment':attachment.pk,'sha256':attachment.sha256},ip=ip(request))
-    return FileResponse(stream,as_attachment=True,filename=attachment.name)
+    response=FileResponse(stream,as_attachment=True,filename=attachment.name);response['Cache-Control']='no-store';return response
 
 @login_required
 def print_mail(request,pk):
     mail=get_object_or_404(services.visible(request.user),pk=pk)
-    if mail.secrecy in [Secrecy.RESTRICTED,Secrecy.SECRET]: raise PermissionDenied('الطباعة غير متاحة للمراسلات المقيدة والسرية.')
+    from .governance import can_export
+    if not can_export(request.user,mail,'printing'): raise PermissionDenied('الطباعة غير متاحة للمراسلات المقيدة والسرية.')
     services.event(mail,request.user,'فتح نسخة للطباعة','عرض نسخة قابلة للطباعة؛ لا يثبت وقوع الطباعة',ip=ip(request))
-    return render(request,'correspondence/print.html',{'mail':mail,'body':services.rendered_body(mail)})
+    return render(request,'correspondence/print.html',{'mail':mail,'body':__import__('correspondence.documents',fromlist=['clean_richtext']).clean_richtext(services.rendered_body(mail)) if mail.rich_text else services.rendered_body(mail)})
 
 @login_required
 def reports(request):
@@ -161,7 +177,11 @@ def settings_view(request,kind=None,pk=None):
         return render(request,'correspondence/settings.html',{'form':form,'config_labels':CONFIG_LABELS,'settings':MailSettings.current(),'links':[(key,label) for key,label in CONFIG_LABELS.items()]})
     if kind not in CONFIG_MODELS: raise Http404()
     model=CONFIG_MODELS[kind]; instance=get_object_or_404(model,pk=pk) if pk else None
-    if kind=='template' and instance: raise PermissionDenied('القالب المعتمد لا يُعدّل؛ أنشئ إصدارًا جديدًا بالاسم نفسه ورقم إصدار أعلى.')
+    if kind=='template' and instance:
+        form=modelform_factory(MailTemplate,fields=['active'])(request.POST or None,instance=instance)
+        if request.method=='POST' and form.is_valid():
+            form.save();core_services.audit(None,request.user,'تعطيل/تفعيل قالب',new={'id':instance.pk,'active':instance.active});return redirect('mail-config',kind=kind)
+        return render(request,'correspondence/config.html',{'title':'تفعيل أو تعطيل نسخة القالب','kind':kind,'form':form,'records':MailTemplate.objects.all()})
     labels={'name':'الاسم','email':'البريد الإلكتروني','supervisory':'جهة إشرافية','active':'نشط','parent':'التصنيف الأب','route_unit':'وحدة التوجيه التلقائي','retention':'فئة الاستبقاء','years':'سنوات الحفظ (فارغ للحفظ الدائم)','legal_reference':'مرجع السياسة المعتمدة','approved':'معتمد وفق مرجع الجمعية','version':'رقم الإصدار','kind':'النوع','body':'نص القالب والمتغيرات','levels':'ترتيب أدوار الاعتماد (JSON)','authority_reference':'مرجع مصفوفة الصلاحيات','date':'التاريخ','user':'المستخدم الحالي','register':'تسجيل وإحالة الوارد','templates':'إدارة القوالب','compliance':'مسؤول امتثال','principal':'صاحب الصلاحية','delegate':'النائب','starts':'بداية التفويض','ends':'نهاية التفويض','reason':'سبب التفويض'}
     form_class=modelform_factory(model,exclude=['created_at'],labels=labels); form=form_class(request.POST or None,instance=instance)
     if request.method=='POST' and form.is_valid():

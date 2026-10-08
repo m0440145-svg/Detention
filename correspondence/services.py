@@ -18,7 +18,7 @@ def visible(user):
     qs=Correspondence.objects.select_related('owner','unit','party','classification','classification__retention','created_by','signer','route','template','related','decision').prefetch_related('authorized','cc')
     if not user.is_authenticated or not user.is_active or user.role==Role.ADMIN: return qs.none()
     direct=Q(owner=user)|Q(created_by=user)|Q(authorized=user)|Q(cc=user)|Q(referrals__recipient=user)
-    scope=direct
+    scope=direct|Q(secrecy=Secrecy.PUBLIC)
     if user.role in GLOBAL_ROLES: scope=Q()
     elif user.role in [Role.HEAD,Role.VIEWER]: scope|=Q(unit__in=user.units.all())
     allowed=Q(secrecy__in=[Secrecy.PUBLIC,Secrecy.INTERNAL])|direct
@@ -64,7 +64,11 @@ def event(mail,user,action,reason,old=None,new=None,ip=''):
     previous=mail.events.order_by('-pk').first(); previous_hash=previous.digest if previous else ''
     at=timezone.now(); old=old or {}; new=new or {}; actor_id=user.pk if user else None
     digest=hashlib.sha256(event_payload(mail.pk,actor_id,action,reason,ip,old,new,previous_hash,at).encode()).hexdigest()
-    return MailEvent.objects.create(mail=mail,actor=user,action=action,reason=reason,ip=ip,old=old,new=new,previous_hash=previous_hash,digest=digest,created_at=at)
+    row=MailEvent.objects.create(mail=mail,actor=user,action=action,reason=reason,ip=ip,old=old,new=new,previous_hash=previous_hash,digest=digest,created_at=at)
+    from .integrations import emit_event
+    mapping={'تسجيل مراسلة':'registered','إحالة مراسلة':'referred','إجراء: done':'closed','إجراء: cancel':'closed','تنبيه SLA':'late'}
+    if action in mapping: emit_event(mail,mapping[action],row.pk)
+    return row
 
 
 def verify_chain(mail):
@@ -77,7 +81,7 @@ def verify_chain(mail):
 
 
 def snapshot(mail):
-    fields=['reference','kind','subject','body','external_number','original_date','party_id','classification_id','template_id','unit_id','owner_id','secrecy','priority','status','channel','source_platform','no_attachments','signer_id','route_id','approval_roles','approval_index','related_id','decision_id','due_at','paused_at','signed_at','signature_method','signed_by_id']
+    fields=['rich_text','summary','keywords','project_reference','program_reference','personal_data','reference','kind','subject','body','external_number','original_date','party_id','classification_id','template_id','unit_id','owner_id','secrecy','priority','status','channel','source_platform','no_attachments','signer_id','route_id','approval_roles','approval_index','related_id','decision_id','due_at','paused_at','signed_at','signature_method','signed_by_id']
     return {k:(getattr(mail,k).isoformat() if hasattr(getattr(mail,k),'isoformat') else getattr(mail,k)) for k in fields}
 
 
@@ -139,6 +143,9 @@ def create_mail(user,data,authorized=(),cc=(),upload=None,ip=''):
     if user.role in [Role.ADMIN,Role.VIEWER,Role.BOARD]: raise PermissionDenied('لا تملك صلاحية تسجيل مراسلة.')
     if data.get('kind')==Kind.IN and user.role not in GLOBAL_ROLES|{Role.HEAD} and not has_access(user,'register'): raise PermissionDenied('تسجيل الوارد يتطلب صلاحية الاتصالات الإدارية.')
     safe={k:v for k,v in data.items() if k in EDIT_FIELDS}; mail=Correspondence(**safe,created_by=user)
+    if mail.rich_text:
+        from .documents import clean_richtext
+        mail.body=clean_richtext(mail.body)
     validate_people(mail,user); mail.full_clean(exclude=['reference'])
     rules=MailSettings.current(); now=timezone.now(); mail.created_at=now
     mail.sla_hours=float(rules.sla_days[mail.priority])*(rules.work_end-rules.work_start)
@@ -165,11 +172,11 @@ def create_mail(user,data,authorized=(),cc=(),upload=None,ip=''):
         if mail.secrecy in [Secrecy.RESTRICTED,Secrecy.SECRET] and not mail.authorized.filter(pk=target.pk).exists(): continue
         Referral.objects.create(mail=mail,recipient=target,instruction='study',note='توجيه تلقائي حسب الجهة/التصنيف',created_by=user)
         alert(mail,target,'routing','مراسلة واردة بانتظار إجراء',f'route:{mail.pk}:{target.pk}')
-    if targets and mail.referrals.exists(): mail.status=MailStatus.REFERRED; mail.save(update_fields=['status'])
+    if targets and mail.referrals.exists(): mail.status=MailStatus.REFERRED; mail.first_referred_at=now; mail.save(update_fields=['status','first_referred_at'])
     return mail
 
 
-EDIT_FIELDS=['kind','subject','body','external_number','original_date','party','classification','template','unit','owner','secrecy','priority','channel','source_platform','no_attachments','signer','route','related','decision','external_deadline']
+EDIT_FIELDS=['rich_text','summary','keywords','project_reference','program_reference','personal_data','kind','subject','body','external_number','original_date','party','classification','template','unit','owner','secrecy','priority','channel','source_platform','no_attachments','signer','route','related','decision','external_deadline']
 @transaction.atomic
 def edit_mail(user,mail,data,reason,ip=''):
     mail=Correspondence.objects.select_for_update().get(pk=mail.pk); require_edit(user,mail); reason=reason_required(reason)
@@ -178,6 +185,9 @@ def edit_mail(user,mail,data,reason,ip=''):
     for k,v in data.items():
         if k not in EDIT_FIELDS or k=='kind': raise ValidationError('الحقل لا يقبل التعديل المباشر.')
         setattr(mail,k,v)
+    if mail.rich_text:
+        from .documents import clean_richtext
+        mail.body=clean_richtext(mail.body)
     validate_people(mail,user); mail.full_clean(); mail.updated_at=timezone.now(); mail.save()
     rebuild_search(mail)
     event(mail,user,'تعديل مراسلة',reason,old,snapshot(mail),ip)
@@ -212,7 +222,8 @@ def refer(user,mail,recipients,instruction,note='',ip='',mode='parallel'):
         if mail.referrals.filter(recipient=recipient,completed_at__isnull=True).exists(): continue
         row=Referral.objects.create(mail=mail,recipient=recipient,instruction=instruction,note=note,created_by=user,mode=mode,batch=batch,position=position); result.append(row)
         if mode=='parallel' or position==0: alert(mail,recipient,'referral','مراسلة محالة إليك',f'referral:{row.pk}')
-    old=mail.status; mail.status=MailStatus.REFERRED; mail.updated_at=timezone.now(); mail.save(update_fields=['status','updated_at'])
+    if not mail.first_referred_at:mail.first_referred_at=timezone.now()
+    old=mail.status; mail.status=MailStatus.REFERRED; mail.updated_at=timezone.now(); mail.save(update_fields=['status','updated_at','first_referred_at'])
     event(mail,user,'إحالة مراسلة',note or dict(Referral._meta.get_field('instruction').choices)[instruction],{'status':old},{'status':mail.status,'recipients':[p.pk for p in recipients],'instruction':instruction,'mode':mode},ip)
     return result
 
@@ -264,7 +275,27 @@ def transition(user,mail,action,reason,ip='',evidence=''):
     mail=Correspondence.objects.select_for_update().get(pk=mail.pk); require_visible(user,mail); reason=reason_required(reason)
     if user.role in [Role.ADMIN,Role.VIEWER,Role.BOARD]: raise PermissionDenied('الدور للقراءة أو الإعدادات فقط.')
     old=snapshot(mail); current=mail.status
-    if action=='submit':
+    if action=='submit-incoming-approval':
+        require_manage(user,mail)
+        if mail.kind!=Kind.IN or current not in ['active','referred']:raise ValidationError('اعتماد الوارد متاح خلال المعالجة.')
+        if not mail.route or mail.route.kind!=Kind.IN or not mail.route.active:raise ValidationError('اختر مسار اعتماد وارد معتمدًا.')
+        mail.route.full_clean();mail.approval_roles=list(mail.route.levels);mail.approval_index=0;mail.status=MailStatus.APPROVAL
+    elif action=='suspend':
+        require_manage(user,mail)
+        if mail.kind!=Kind.IN or current not in ['registered','referred','active']:raise ValidationError('لا يمكن تعليق الوارد.')
+        mail.status=MailStatus.SUSPENDED
+    elif action=='unsuspend':
+        require_manage(user,mail)
+        if current!=MailStatus.SUSPENDED:raise ValidationError('السجل غير معلق.')
+        mail.status=MailStatus.ACTIVE
+    elif action=='done-override':
+        require_manage(user,mail)
+        if user.role!=Role.EXECUTIVE or mail.kind!=Kind.IN or current not in ['registered','referred','active','suspended']:raise PermissionDenied('الاستثناء التنفيذي للوارد المفتوح فقط.')
+        branches=list(mail.referrals.filter(completed_at__isnull=True).values_list('pk',flat=True))
+        mail.referrals.filter(pk__in=branches).update(completed_at=timezone.now())
+        event(mail,user,'استثناء إغلاق فروع الإحالة',reason,new={'referrals':branches,'linked_tasks_unchanged':True},ip=ip)
+        mail.status=MailStatus.DONE;mail.completed_at=timezone.now()
+    elif action=='submit':
         require_edit(user,mail)
         if mail.kind not in OUTGOING or current not in [MailStatus.DRAFT,MailStatus.RETURNED]: raise ValidationError('لا يمكن تقديم هذه المراسلة.')
         if not mail.signer_id or not mail.route_id or not mail.route.active or mail.route.kind!=mail.kind: raise ValidationError('اختر الموقّع ومسار اعتماد نشطًا مطابقًا لنوع المراسلة.')
@@ -280,7 +311,7 @@ def transition(user,mail,action,reason,ip='',evidence=''):
         if current!=MailStatus.APPROVAL or mail.approval_index>=len(mail.approval_roles): raise ValidationError('لا يوجد اعتماد معلق.')
         if user.pk==mail.created_by_id or not actor_is(user,mail.approval_roles[mail.approval_index],mail): raise PermissionDenied('الاعتماد للمستوى الحالي، دون اعتماد المستخدم لمسودته.')
         mail.approval_index+=1
-        if mail.approval_index==len(mail.approval_roles): mail.status=MailStatus.SIGNING
+        if mail.approval_index==len(mail.approval_roles): mail.status=MailStatus.ACTIVE if mail.kind==Kind.IN else MailStatus.SIGNING
     elif action=='reject':
         if current not in [MailStatus.REVIEW,MailStatus.APPROVAL,MailStatus.SIGNING]: raise ValidationError('لا يمكن إعادة هذه المراسلة.')
         if current==MailStatus.APPROVAL:
@@ -288,7 +319,10 @@ def transition(user,mail,action,reason,ip='',evidence=''):
         else: require_manage(user,mail)
         mail.status=MailStatus.RETURNED; mail.approval_index=0; mail.signed_at=None; mail.signature_method=''; mail.signed_by=None
     elif action=='sign':
-        if current!=MailStatus.SIGNING or mail.kind not in [Kind.INT,Kind.CIR]: raise ValidationError('التوقيع الداخلي متاح للمذكرات والتعاميم فقط؛ الخطابات الخارجية والقرارات تتطلب مزود توقيع موثّق غير مربوط حاليًا.')
+        if current!=MailStatus.SIGNING or mail.kind not in [Kind.INT,Kind.CIR]: raise ValidationError('التوقيع الداخلي متاح للمذكرات والتعاميم فقط؛ الخطابات الخارجية والقرارات تستخدم مسار التوقيع الموثق من صفحة التوقيع والاستبقاء.')
+        policy=MailSettings.current().signature_policy.get(mail.kind,['internal_attestation'])
+        methods=policy.get('methods',[]) if isinstance(policy,dict) else policy
+        if 'internal_attestation' not in methods:raise ValidationError('السياسة تتطلب مستوى توقيع أعلى.')
         delegate=Delegation.objects.filter(principal_id=mail.signer_id,delegate=user,starts__lte=timezone.now(),ends__gte=timezone.now()).exists()
         if user.pk!=mail.signer_id and not delegate: raise PermissionDenied('التوقيع للموقّع المحدد أو النائب ضمن فترة التفويض.')
         if not evidence.strip(): raise ValidationError('أرفق مرجع دليل التوقيع الداخلي؛ هذا الإجراء ليس شهادة رقمية.')
@@ -313,7 +347,7 @@ def transition(user,mail,action,reason,ip='',evidence=''):
     elif action=='resume':
         require_manage(user,mail)
         if current!=MailStatus.WAITING or not mail.paused_at: raise ValidationError('لا يوجد انتظار خارجي موقوف.')
-        hours=work_hours_between(mail.paused_at,timezone.now()); mail.due_at=add_work_hours(mail.due_at,hours); mail.paused_at=None; mail.status=MailStatus.ACTIVE
+        hours=work_hours_between(mail.paused_at,timezone.now()); mail.paused_hours+=hours; mail.due_at=add_work_hours(mail.due_at,hours); mail.paused_at=None; mail.status=MailStatus.ACTIVE
     elif action=='done':
         require_manage(user,mail)
         if mail.kind!=Kind.IN or current not in [MailStatus.REFERRED,MailStatus.ACTIVE,MailStatus.REGISTERED]: raise ValidationError('لا يمكن إنجاز هذه المراسلة.')
@@ -334,6 +368,7 @@ def transition(user,mail,action,reason,ip='',evidence=''):
         if current in [MailStatus.ARCHIVED,MailStatus.CANCELLED]: raise ValidationError('المراسلة نهائية.')
         mail.status=MailStatus.CANCELLED; mail.paused_at=None
     else: raise ValidationError('إجراء غير مدعوم.')
+    if action=='done':mail.completed_at=timezone.now()
     mail.updated_at=timezone.now(); mail.full_clean(); mail.save()
     rebuild_search(mail)
     event(mail,user,'إجراء: '+action,reason,old,snapshot(mail),ip)
@@ -365,8 +400,8 @@ def run_mail_rules(now=None):
     now=now or timezone.now(); rules=MailSettings.current(); count=0
     for mail in Correspondence.objects.select_for_update().exclude(status__in=TERMINAL).select_related('unit','owner'):
         if mail.paused_at or not mail.due_at: continue
-        total=max(work_hours_between(mail.created_at,mail.due_at,rules),0.01)
-        elapsed=work_hours_between(mail.created_at,now,rules); ratio=elapsed/total*100
+        total=max(work_hours_between(mail.created_at,mail.due_at,rules)-mail.paused_hours,0.01)
+        elapsed=max(0,work_hours_between(mail.created_at,now,rules)-mail.paused_hours); ratio=elapsed/total*100
         targets=[('reminder',rules.reminder_percent,[mail.owner]),('manager',rules.manager_percent,[mail.unit.head] if mail.unit.head else []),('executive',rules.executive_percent,list(User.objects.filter(role=Role.EXECUTIVE,is_active=True)))]
         for stage,threshold,recipients in targets:
             if ratio<threshold: continue

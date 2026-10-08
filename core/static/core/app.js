@@ -11,3 +11,10 @@ document.querySelector('[data-print]')?.addEventListener('click',()=>window.prin
 
 
 document.querySelectorAll("[data-bulk-task]").forEach(box=>box.addEventListener("change",()=>{document.querySelectorAll("[data-bulk-task]").forEach(other=>{if(other.dataset.bulkTask===box.dataset.bulkTask)other.checked=box.checked;});}));
+// Accessible editing tools preserve the textarea as the canonical submitted value.
+document.addEventListener('DOMContentLoaded',()=>{
+const text=document.querySelector('textarea[name="body"]'),rich=document.querySelector('input[name="rich_text"]');
+if(text&&rich){const tools=document.createElement('div');tools.className='fields-row';tools.setAttribute('role','toolbar');tools.setAttribute('aria-label','أدوات تحرير النص');
+for(const [label,start,end] of [['فقرة','<p>','</p>'],['عريض','<strong>','</strong>'],['عنوان','<h2>','</h2>'],['جدول','<table><tr><th>عنوان</th><th>عنوان</th></tr><tr><td>','</td><td>بيانات</td></tr></table>']]){const b=document.createElement('button');b.type='button';b.className='btn secondary';b.textContent=label;b.addEventListener('click',()=>{const a=text.selectionStart,z=text.selectionEnd;text.setRangeText(start+text.value.slice(a,z)+end,a,z,'end');rich.checked=true;text.focus();});tools.append(b);}text.before(tools);}
+document.addEventListener('keydown',e=>{if(e.altKey&&e.key.toLowerCase()==='n'){e.preventDefault();location.href='/communications/register/';}if(e.altKey&&e.key.toLowerCase()==='s'){e.preventDefault();document.querySelector('input[name="q"]')?.focus();}});
+});

@@ -13,7 +13,7 @@ class MailSerializer(serializers.ModelSerializer):
     reason=serializers.CharField(write_only=True,required=False)
     class Meta:
         model=Correspondence
-        fields=['id','uid','code','reference','kind','subject','body','external_number','original_date','party','classification','template','unit','owner','authorized','cc','secrecy','priority','status','status_label','channel','source_platform','no_attachments','signer','route','approval_roles','approval_index','related','decision','created_at','hijri_date','due_at','referral_due_at','external_deadline','sla_hours','paused_at','signed_at','signature_method','reason']
+        fields=['id','uid','code','reference','kind','subject','body','rich_text','summary','keywords','project_reference','program_reference','personal_data','external_number','original_date','party','classification','template','unit','owner','authorized','cc','secrecy','priority','status','status_label','channel','source_platform','no_attachments','signer','route','approval_roles','approval_index','related','decision','created_at','hijri_date','due_at','referral_due_at','external_deadline','sla_hours','paused_at','signed_at','signature_method','reason']
         read_only_fields=['uid','reference','status','approval_roles','approval_index','created_at','due_at','referral_due_at','sla_hours','paused_at','signed_at','signature_method']
     def create(self,data):
         data.pop('reason',''); authorized=data.pop('authorized',[]);cc=data.pop('cc',[])
@@ -39,7 +39,7 @@ class MailViewSet(viewsets.ModelViewSet):
     http_method_names=['get','post','patch','head','options']
     def get_queryset(self):
         qs=services.visible(self.request.user)
-        for field in ['kind','status','priority','secrecy']:
+        for field in ['kind','status','priority','secrecy','party','classification','project_reference','program_reference']:
             if self.request.query_params.get(field): qs=qs.filter(**{field:self.request.query_params[field]})
         if self.request.query_params.get('q'):
             from django.db.models import Q
@@ -48,6 +48,19 @@ class MailViewSet(viewsets.ModelViewSet):
     def retrieve(self,request,*args,**kwargs):
         mail=self.get_object(); services.event(mail,request.user,'اطلاع API','قراءة المراسلة عبر API',ip=request.META.get('REMOTE_ADDR',''))
         return Response(self.get_serializer(mail).data)
+    @action(detail=False,methods=['get'])
+    def metrics(self,request):
+        from .reports import metrics
+        return Response(metrics(request.user))
+    @action(detail=True,methods=['post'])
+    def signature(self,request,pk=None):
+        from .governance import request_signature
+        row=request_signature(request.user,self.get_object(),request.data.get('reason',''))
+        return Response({'request':str(row.uid),'state':row.state},status=202)
+    @action(detail=True,methods=['get'])
+    def revisions(self,request,pk=None):
+        from .governance import revision_diff
+        return Response(revision_diff(self.get_object()))
     @action(detail=True,methods=['post'])
     def transition(self,request,pk=None):
         data=ActionSerializer(data=request.data);data.is_valid(raise_exception=True)
@@ -98,7 +111,7 @@ class MailViewSet(viewsets.ModelViewSet):
         return Response({'job':job.pk,'state':job.state},status=202)
     @action(detail=True,methods=['get'])
     def extraction(self,request,pk=None):
-        return Response(list(OCRJob.objects.filter(attachment__mail=self.get_object()).values('id','attachment_id','state','text','confidence','error')))
+        return Response(list(OCRJob.objects.filter(attachment__mail=self.get_object()).values('id','attachment_id','state','text','confidence','page_confidence','proposals','error')))
     @action(detail=True,methods=['get'])
     def audit(self,request,pk=None):
         mail=self.get_object()

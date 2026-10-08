@@ -19,6 +19,7 @@ class MailStatus(models.TextChoices):
     REGISTERED='registered','مسجّل'
     REFERRED='referred','محال'
     ACTIVE='active','قيد المعالجة'
+    SUSPENDED='suspended','معلّق بمبرر'
     WAITING='waiting','بانتظار رد جهة خارجية'
     REVIEW='review','تدقيق'
     APPROVAL='approval','بانتظار اعتماد'
@@ -95,6 +96,13 @@ class MailSettings(models.Model):
         for matrix in [self.sla_days,self.referral_hours]:
             if not isinstance(matrix,dict) or set(matrix)!=set(['normal','important','urgent','critical']) or any(not isinstance(x,(int,float)) or isinstance(x,bool) or not 0<x<=365 for x in matrix.values()): raise ValidationError('مصفوفة SLA يجب أن تشمل الأولويات الأربع بقيم موجبة حتى 365.')
         if not self.reminder_percent<=self.manager_percent<=self.executive_percent: raise ValidationError('رتّب نسب التذكير والتصعيد تصاعديًا.')
+    brand_name=models.CharField(max_length=200,default='جمعية الإحسان للخدمات الاجتماعية')
+    license_number=models.CharField(max_length=30,default='1504')
+    national_address=models.CharField(max_length=250,blank=True)
+    footer=models.TextField(default='جمعية الإحسان للخدمات الاجتماعية')
+    signature_policy=models.JSONField(default=dict,blank=True)
+    retention_committee=models.ManyToManyField(settings.AUTH_USER_MODEL,blank=True,related_name='+')
+    retention_quorum=models.PositiveSmallIntegerField(default=2)
     @classmethod
     def current(cls):
         return cls.objects.get_or_create(pk=1,defaults={'sla_days':{'normal':10,'important':5,'urgent':3,'critical':1},'referral_hours':{'normal':16,'important':8,'urgent':8,'critical':2},'weekend':[4,5]})[0]
@@ -152,6 +160,7 @@ class Correspondence(models.Model):
     referral_due_at=models.DateTimeField(null=True,blank=True)
     external_deadline=models.DateTimeField(null=True,blank=True)
     sla_hours=models.FloatField(default=80)
+    paused_hours=models.FloatField(default=0)
     paused_at=models.DateTimeField(null=True,blank=True)
     signature_method=models.CharField(max_length=20,blank=True)
     signature_evidence=models.TextField(blank=True)
@@ -160,6 +169,14 @@ class Correspondence(models.Model):
     sent_evidence=models.TextField(blank=True)
     archived_at=models.DateTimeField(null=True,blank=True)
     retain_until=models.DateField(null=True,blank=True)
+    rich_text=models.BooleanField(default=False)
+    summary=models.TextField(blank=True)
+    keywords=models.JSONField(default=list,blank=True)
+    project_reference=models.CharField(max_length=100,blank=True)
+    program_reference=models.CharField(max_length=100,blank=True)
+    personal_data=models.BooleanField(default=False)
+    first_referred_at=models.DateTimeField(null=True,blank=True)
+    completed_at=models.DateTimeField(null=True,blank=True)
     legacy_reference=models.CharField(max_length=100,blank=True)
     class Meta:
         ordering=['-created_at','-pk']
@@ -173,6 +190,16 @@ class Correspondence(models.Model):
         return str(Gregorian(d.year,d.month,d.day).to_hijri())
     @property
     def is_overdue(self): return self.status not in ['done','archived','cancelled'] and not self.paused_at and bool(self.due_at and self.due_at<timezone.now())
+    @property
+    def sla_percent(self):
+        from .services import work_hours_between
+        total=max(0.01,work_hours_between(self.created_at,self.due_at)-self.paused_hours) if self.due_at else 1
+        elapsed=max(0,work_hours_between(self.created_at,self.paused_at or timezone.now())-self.paused_hours)
+        return round(elapsed/total*100,1)
+    @property
+    def sla_color(self):
+        if self.status in ['done','archived','cancelled']:return 'gray'
+        return 'red' if self.sla_percent>100 else 'amber' if self.sla_percent>=70 else 'green'
     def __str__(self): return self.code+' — '+self.subject
 
 class Referral(models.Model):
@@ -238,6 +265,8 @@ class OCRJob(models.Model):
     requested_by=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT)
     state=models.CharField(max_length=20,choices=[('pending','بانتظار الاستخراج'),('done','تم الاستخراج — يحتاج مراجعة'),('failed','تعذر الاستخراج')],default='pending')
     text=models.TextField(blank=True)
+    page_confidence=models.JSONField(default=list,blank=True)
+    proposals=models.JSONField(default=dict,blank=True)
     confidence=models.FloatField(null=True,blank=True)
     error=models.TextField(blank=True)
     created_at=models.DateTimeField(auto_now_add=True)
@@ -248,3 +277,5 @@ class SavedSearch(models.Model):
     name=models.CharField(max_length=120)
     filters=models.JSONField(default=dict)
     class Meta: constraints=[models.UniqueConstraint(fields=['user','name'],name='mail_saved_search_name')]
+
+from .governance_models import (Integration, Delivery, ExternalIdentity, ExternalUnit, SyncReceipt, NotificationPreference, MFADevice, ExportGrant, ProcessingActivity, SubjectRequest, RetentionCase, RetentionApproval, LegalHold, SignatureRequest, MigrationBatch, ReportSchedule, APICallLog)

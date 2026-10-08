@@ -18,6 +18,10 @@ class Command(BaseCommand):
                 count=run_rules()
                 from correspondence.ocr import run_jobs
                 extracted=run_jobs()
+                from correspondence.integrations import schedule_notifications,deliver_pending,poll_hr
+                poll_hr();schedule_notifications();deliver_pending()
+                from correspondence.reports import run_schedules
+                run_schedules()
                 if extracted: self.stdout.write(f'Extraction jobs completed: {extracted}')
                 self.stdout.write(f'{timezone.localtime().isoformat()} rules evaluated; new escalations: {count}')
                 self.stdout.flush()
