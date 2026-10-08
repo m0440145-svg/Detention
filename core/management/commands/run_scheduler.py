@@ -16,6 +16,9 @@ class Command(BaseCommand):
             close_old_connections()
             try:
                 count=run_rules()
+                from correspondence.ocr import run_jobs
+                extracted=run_jobs()
+                if extracted: self.stdout.write(f'Extraction jobs completed: {extracted}')
                 self.stdout.write(f'{timezone.localtime().isoformat()} rules evaluated; new escalations: {count}')
                 self.stdout.flush()
             except (OperationalError,ProgrammingError) as exc:

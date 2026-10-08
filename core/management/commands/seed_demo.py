@@ -51,4 +51,6 @@ class Command(BaseCommand):
         services.run_rules(); RuleSettings.current()
         viewer=User.objects.create_user(username='demo-viewer',email='demo-viewer@example.invalid',password=password,employee_number='DEMO-VIEW',first_name='مراقب',last_name='تجريبي',role=Role.VIEWER); viewer.units.add(units[4])
         User.objects.create_user(username='demo-board',email='demo-board@example.invalid',password=password,employee_number='DEMO-BOARD',first_name='أمين',last_name='المجلس',role=Role.BOARD)
+        from django.core.management import call_command
+        call_command('seed_mail_demo',stdout=self.stdout)
         self.stdout.write(self.style.SUCCESS(f'Created {len(units)} units, {len(users)+2} users, 30 tasks and 3 decisions. Accounts: demo-admin, demo-01 (executive), demo-03 (head), demo-09 (employee), demo-viewer, demo-board.'))

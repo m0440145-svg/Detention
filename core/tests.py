@@ -195,7 +195,7 @@ class AcceptanceTests(TestCase):
     def test_seed_has_required_arabic_data(self):
         from django.core.management import call_command
         with patch.dict('os.environ',{'DEMO_PASSWORD':'Temporary-Demo-Password!'}): call_command('seed_demo',stdout=io.StringIO())
-        self.assertEqual(Task.objects.filter(title__endswith='— تجريبي').count(),30)
+        self.assertEqual(Task.objects.filter(title__endswith='— تجريبي').count(),31)
         self.assertGreaterEqual(User.objects.filter(username__startswith='demo').count(),15)
         self.assertEqual(Unit.objects.count(),16)
         self.assertTrue(Task.objects.filter(status=Status.CLOSED).exists()); self.assertTrue(Task.objects.filter(obstacles__resolved_at__isnull=True,obstacles__isnull=False).exists())

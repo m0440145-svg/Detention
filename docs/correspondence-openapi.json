@@ -1,0 +1,933 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Ehsan Correspondence API",
+    "version": "1.0.0",
+    "description": "Session-authenticated correspondence module. Cookie session and CSRF required for writes. External OAuth2/SSO/signature integrations are not configured."
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
+  "security": [
+    {
+      "session": []
+    }
+  ],
+  "paths": {
+    "/api/communications/": {
+      "get": {
+        "summary": "List visible mail; kind/status/priority/secrecy/q filters",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid fields/state/reason"
+          },
+          "403": {
+            "description": "Permission or CSRF denied"
+          },
+          "404": {
+            "description": "Record not visible or missing"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create incoming or outgoing draft",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid fields/state/reason"
+          },
+          "403": {
+            "description": "Permission or CSRF denied"
+          },
+          "404": {
+            "description": "Record not visible or missing"
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-CSRFToken",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MailInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/communications/{id}/": {
+      "get": {
+        "summary": "Read visible mail and audit access",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid fields/state/reason"
+          },
+          "403": {
+            "description": "Permission or CSRF denied"
+          },
+          "404": {
+            "description": "Record not visible or missing"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ]
+      },
+      "patch": {
+        "summary": "Edit eligible draft/returned/registered mail with reason",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid fields/state/reason"
+          },
+          "403": {
+            "description": "Permission or CSRF denied"
+          },
+          "404": {
+            "description": "Record not visible or missing"
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-CSRFToken",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/MailInput"
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "reason"
+                    ],
+                    "properties": {
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/communications/{id}/transition/": {
+      "post": {
+        "summary": "Apply checked lifecycle action",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid fields/state/reason"
+          },
+          "403": {
+            "description": "Permission or CSRF denied"
+          },
+          "404": {
+            "description": "Record not visible or missing"
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-CSRFToken",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Action"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/communications/{id}/attachments/": {
+      "get": {
+        "summary": "List names, hashes and protected download URLs",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid fields/state/reason"
+          },
+          "403": {
+            "description": "Permission or CSRF denied"
+          },
+          "404": {
+            "description": "Record not visible or missing"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ]
+      },
+      "post": {
+        "summary": "Upload immutable attachment version",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid fields/state/reason"
+          },
+          "403": {
+            "description": "Permission or CSRF denied"
+          },
+          "404": {
+            "description": "Record not visible or missing"
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-CSRFToken",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "file",
+                  "reason"
+                ],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/communications/{id}/referrals/": {
+      "get": {
+        "summary": "List referrals; suppress task IDs outside task scope",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid fields/state/reason"
+          },
+          "403": {
+            "description": "Permission or CSRF denied"
+          },
+          "404": {
+            "description": "Record not visible or missing"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ]
+      },
+      "post": {
+        "summary": "Refer with instruction and mode",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid fields/state/reason"
+          },
+          "403": {
+            "description": "Permission or CSRF denied"
+          },
+          "404": {
+            "description": "Record not visible or missing"
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-CSRFToken",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "recipient",
+                  "instruction"
+                ],
+                "properties": {
+                  "recipient": {
+                    "type": "integer"
+                  },
+                  "instruction": {
+                    "type": "string",
+                    "enum": [
+                      "view",
+                      "reply",
+                      "study",
+                      "execute",
+                      "file"
+                    ]
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "parallel",
+                      "sequential"
+                    ]
+                  },
+                  "note": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/communications/{id}/complete-referral/": {
+      "post": {
+        "summary": "complete-referral",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid fields/state/reason"
+          },
+          "403": {
+            "description": "Permission or CSRF denied"
+          },
+          "404": {
+            "description": "Record not visible or missing"
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-CSRFToken",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "referral",
+                  "reason"
+                ],
+                "properties": {
+                  "referral": {
+                    "type": "integer"
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/communications/{id}/convert-to-task/": {
+      "post": {
+        "summary": "convert-to-task",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid fields/state/reason"
+          },
+          "403": {
+            "description": "Permission or CSRF denied"
+          },
+          "404": {
+            "description": "Record not visible or missing"
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-CSRFToken",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "referral",
+                  "due_date"
+                ],
+                "properties": {
+                  "referral": {
+                    "type": "integer"
+                  },
+                  "due_date": {
+                    "type": "string",
+                    "format": "date"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/communications/{id}/extend-due/": {
+      "post": {
+        "summary": "extend-due",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid fields/state/reason"
+          },
+          "403": {
+            "description": "Permission or CSRF denied"
+          },
+          "404": {
+            "description": "Record not visible or missing"
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-CSRFToken",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "due_at",
+                  "reason"
+                ],
+                "properties": {
+                  "due_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/communications/{id}/extract_text/": {
+      "post": {
+        "summary": "extract_text",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid fields/state/reason"
+          },
+          "403": {
+            "description": "Permission or CSRF denied"
+          },
+          "404": {
+            "description": "Record not visible or missing"
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-CSRFToken",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "attachment"
+                ],
+                "properties": {
+                  "attachment": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/communications/{id}/extraction/": {
+      "get": {
+        "summary": "extraction",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid fields/state/reason"
+          },
+          "403": {
+            "description": "Permission or CSRF denied"
+          },
+          "404": {
+            "description": "Record not visible or missing"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ]
+      }
+    },
+    "/api/communications/{id}/audit/": {
+      "get": {
+        "summary": "audit",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid fields/state/reason"
+          },
+          "403": {
+            "description": "Permission or CSRF denied"
+          },
+          "404": {
+            "description": "Record not visible or missing"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ]
+      }
+    },
+    "/api/communications-master/": {
+      "get": {
+        "summary": "Operational master data",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid fields/state/reason"
+          },
+          "403": {
+            "description": "Permission or CSRF denied"
+          },
+          "404": {
+            "description": "Record not visible or missing"
+          }
+        }
+      }
+    },
+    "/api/communications-bulk/": {
+      "post": {
+        "summary": "Atomic reminder or archival within every selected record permission",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid fields/state/reason"
+          },
+          "403": {
+            "description": "Permission or CSRF denied"
+          },
+          "404": {
+            "description": "Record not visible or missing"
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-CSRFToken",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "mail_ids",
+                  "action",
+                  "reason"
+                ],
+                "properties": {
+                  "mail_ids": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "items": {
+                      "type": "integer"
+                    }
+                  },
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "remind",
+                      "archive"
+                    ]
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "session": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "sessionid"
+      }
+    },
+    "schemas": {
+      "MailInput": {
+        "type": "object",
+        "required": [
+          "kind",
+          "subject",
+          "party",
+          "classification",
+          "unit",
+          "owner"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "IN",
+              "OUT",
+              "INT",
+              "CIR",
+              "DEC",
+              "RPL"
+            ]
+          },
+          "subject": {
+            "type": "string",
+            "maxLength": 250
+          },
+          "body": {
+            "type": "string"
+          },
+          "party": {
+            "type": "integer"
+          },
+          "classification": {
+            "type": "integer"
+          },
+          "unit": {
+            "type": "integer"
+          },
+          "owner": {
+            "type": "integer"
+          },
+          "external_number": {
+            "type": "string",
+            "description": "Required for IN"
+          },
+          "original_date": {
+            "type": "string",
+            "format": "date",
+            "description": "Required for IN"
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "normal",
+              "important",
+              "urgent",
+              "critical"
+            ]
+          },
+          "secrecy": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "restricted",
+              "secret"
+            ]
+          },
+          "signer": {
+            "type": "integer"
+          },
+          "route": {
+            "type": "integer"
+          },
+          "related": {
+            "type": "integer",
+            "description": "Required for RPL"
+          },
+          "no_attachments": {
+            "type": "boolean"
+          },
+          "authorized": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "cc": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          }
+        }
+      },
+      "Action": {
+        "type": "object",
+        "required": [
+          "action",
+          "reason"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "submit",
+              "review",
+              "approve",
+              "reject",
+              "sign",
+              "send",
+              "receive",
+              "start",
+              "pause",
+              "resume",
+              "done",
+              "archive",
+              "cancel"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "evidence": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

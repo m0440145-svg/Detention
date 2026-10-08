@@ -264,6 +264,8 @@ def run_rules(today=None):
             for target in targets:
                 e,created=Escalation.objects.get_or_create(task=task,recipient=target,level=level,defaults={'reason':f'تأخير {late} أيام'})
                 if created: notify(task,f'{task.code}: تصعيد تأخير {late} أيام',[target]); audit(task,None,'تصعيد آلي',new={'level':level,'recipient':target.pk,'late_days':late,'threshold_days':threshold,'reason':e.reason}); count+=1
+    from correspondence.services import run_mail_rules
+    count+=run_mail_rules()
     return count
 
 
