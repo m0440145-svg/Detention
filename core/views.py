@@ -60,7 +60,7 @@ def filter_tasks(request,qs):
     return qs.distinct()
 def kpis(qs):
     tasks=list(qs); total=len(tasks); closed=[t for t in tasks if t.status==Status.CLOSED]; open_tasks=[t for t in tasks if t.status not in services.TERMINAL]
-    overdue=[t for t in open_tasks if t.is_overdue]; blocked=[t for t in open_tasks if t.status==Status.BLOCKED]
+    overdue=[t for t in open_tasks if t.is_overdue]; blocked=[t for t in open_tasks if t.is_blocked]
     ontime=sum(1 for t in closed if t.submitted_at and timezone.localtime(t.submitted_at).date()<=t.due_date)
     durations=[(timezone.localtime(t.closed_at).date()-t.start_date).days for t in closed if t.closed_at]
     return {'total':total,'open':len(open_tasks),'active':sum(t.status==Status.ACTIVE for t in tasks),'closed':len(closed),'overdue':len(overdue),'blocked':len(blocked),'critical':sum(t.priority==Priority.CRITICAL and t.status not in services.TERMINAL for t in tasks),'approval':sum(t.status==Status.APPROVAL for t in tasks),'completion':round(len(closed)/total*100) if total else 0,'ontime':round(ontime/len(closed)*100) if closed else None,'mean_days':round(sum(durations)/len(durations),1) if durations else None,'mean_late':round(sum(-t.days_remaining for t in overdue)/len(overdue),1) if overdue else 0,'late_rate':round(len(overdue)/len(open_tasks)*100) if open_tasks else 0,'blocked_rate':round(len(blocked)/len(open_tasks)*100) if open_tasks else 0,'closed_month':sum(t.closed_at and timezone.localtime(t.closed_at).date().replace(day=1)==timezone.localdate().replace(day=1) for t in closed)}
@@ -69,6 +69,8 @@ def choices(user):
     return {'units':Unit.objects.filter(pk__in=visible.values('unit_id')),'employees':User.objects.filter(pk__in=visible.values('owner_id')),'statuses':Status.choices,'priorities':Priority.choices,'sources':Source.choices}
 @login_required
 def dashboard(request):
+    if request.user.role==Role.ADMIN:
+        return render(request,'core/admin_dashboard.html',{'users_count':User.objects.count(),'active_users':User.objects.filter(is_active=True).count(),'units_count':Unit.objects.count(),'active_units':Unit.objects.filter(active=True).count()})
     qs=tasks_for(request.user); today=timezone.localdate()
     rows=[]
     for unit in Unit.objects.filter(pk__in=qs.values('unit_id')):
@@ -76,9 +78,10 @@ def dashboard(request):
     employees=[]
     for u in User.objects.filter(pk__in=qs.values('owner_id')):
         employees.append({'user':u,**kpis(qs.filter(owner=u))})
-    return render(request,'core/dashboard.html',{'kpi':kpis(qs),'unit_rows':sorted(rows,key=lambda r:r['completion'],reverse=True),'employee_rows':employees,'decision_obstacles':Obstacle.objects.filter(task__in=qs,needs_decision=True,resolved_at__isnull=True).select_related('task','intervention_owner')[:5],'late_week':qs.filter(due_date__lt=today-timedelta(days=7)).exclude(status__in=services.TERMINAL|{Status.APPROVAL,Status.COMPLETED}).count(),'today_tasks':qs.filter(due_date=today)[:8],'urgent_tasks':qs.filter(priority=Priority.CRITICAL).exclude(status__in=services.TERMINAL)[:6],'recent_comments':Comment.objects.filter(task__in=qs).select_related('user','task').order_by('-created_at')[:5],'notifications':request.user.notifications.all()[:5]})
+    return render(request,'core/dashboard.html',{'kpi':kpis(qs),'unit_rows':sorted(rows,key=lambda r:r['completion'],reverse=True),'employee_rows':employees,'decision_obstacles':Obstacle.objects.filter(task__in=qs,needs_decision=True,resolved_at__isnull=True).select_related('task','intervention_owner')[:5],'late_week':qs.filter(due_date__lt=today-timedelta(days=7)).exclude(status__in=services.TERMINAL).count(),'today_tasks':qs.filter(due_date=today)[:8],'urgent_tasks':qs.filter(priority=Priority.CRITICAL).exclude(status__in=services.TERMINAL)[:6],'recent_comments':Comment.objects.filter(task__in=qs).select_related('user','task').order_by('-created_at')[:5],'notifications':request.user.notifications.all()[:5]})
 @login_required
 def task_list(request):
+    require_operational(request.user)
     qs=filter_tasks(request,tasks_for(request.user))
     scope=request.GET.get('scope')
     if scope=='mine': qs=qs.filter(Q(owner=request.user)|Q(participants=request.user)).distinct()
@@ -86,6 +89,7 @@ def task_list(request):
     return render(request,'core/tasks.html',{'page':Paginator(qs,20).get_page(request.GET.get('page')), 'title':'المهام والتكليفات',**choices(request.user)})
 @login_required
 def task_form(request,pk=None):
+    require_operational(request.user)
     task=get_object_or_404(tasks_for(request.user),pk=pk) if pk else None
     require_manage(request.user,task)
     initial={}
@@ -104,6 +108,7 @@ def task_form(request,pk=None):
     return render(request,'core/form.html',{'form':form,'title':'تعديل المهمة' if task else 'إضافة مهمة'})
 @login_required
 def task_detail(request,pk):
+    require_operational(request.user)
     task=get_object_or_404(tasks_for(request.user),pk=pk)
     error=None
     if request.method=='POST':
@@ -148,25 +153,30 @@ def task_detail(request,pk):
 FOLLOW_TABS=[('overdue','المتأخرة'),('blocked','المتعثرة'),('today','تستحق اليوم'),('soon','خلال 3 أيام'),('stale','بدون تحديث'),('waiting','بانتظار رد'),('approval','بانتظار اعتماد'),('critical','الحرجة'),('escalated','المصعدة'),('returned','المعادة'),('risk','مرشحة للتعثر')]
 @login_required
 def followup(request):
+    require_operational(request.user)
     qs=filter_tasks(request,tasks_for(request.user)).exclude(status__in=services.TERMINAL); today=timezone.localdate(); tab=request.GET.get('tab','overdue')
-    if tab=='overdue': qs=qs.filter(due_date__lt=today).exclude(status__in=[Status.APPROVAL,Status.COMPLETED])
+    if tab=='overdue': qs=qs.filter(due_date__lt=today)
+    elif tab=='blocked': qs=qs.filter(obstacles__resolved_at__isnull=True,obstacles__isnull=False).distinct()
     elif tab=='today': qs=qs.filter(due_date=today)
     elif tab=='soon': qs=qs.filter(due_date__range=(today,today+timedelta(days=3)))
     elif tab=='stale': qs=qs.filter(updated_at__lt=timezone.now()-timedelta(days=RuleSettings.current().stale_days))
     elif tab=='critical': qs=qs.filter(priority=Priority.CRITICAL)
     elif tab=='escalated': qs=qs.filter(escalations__isnull=False).distinct()
     elif tab=='risk': qs=qs.filter(pk__in=[t.pk for t in qs if 'مرشحة للتعثر' in services.flags(t)])
-    else: qs=qs.filter(status=tab if tab in Status.values else Status.BLOCKED)
+    else: qs=qs.filter(status=tab) if tab in Status.values else qs.none()
     return render(request,'core/tasks.html',{'page':Paginator(qs,20).get_page(request.GET.get('page')),'title':'مركز المتابعة','tabs':FOLLOW_TABS,'tab':tab,**choices(request.user)})
 def decisions_for(user):
     qs=Decision.objects.select_related('meeting','followup_owner').prefetch_related('tasks')
+    if user.role==Role.ADMIN: return qs.none()
     if user.role in GLOBAL_ROLES: return qs
     return qs.filter(Q(tasks__in=tasks_for(user))|Q(followup_owner=user)).distinct()
 @login_required
 def decisions(request):
+    require_operational(request.user)
     return render(request,'core/decisions.html',{'decisions':decisions_for(request.user),'manage':request.user.role in GLOBAL_ROLES,'meetings':Meeting.objects.all() if request.user.role in GLOBAL_ROLES else Meeting.objects.filter(decisions__in=decisions_for(request.user)).distinct()})
 @login_required
 def decision_detail(request,pk):
+    require_operational(request.user)
     decision=get_object_or_404(decisions_for(request.user),pk=pk)
     error=None
     if request.method=='POST':
@@ -201,8 +211,8 @@ def generic_form(request,kind,pk=None):
 @login_required
 def directory(request):
     qs=tasks_for(request.user)
-    units=Unit.objects.all() if request.user.role in GLOBAL_ROLES else request.user.units.all()
-    users=User.objects.all() if request.user.role in GLOBAL_ROLES else User.objects.filter(units__in=units).distinct() if request.user.role==Role.HEAD else User.objects.filter(pk=request.user.pk)
+    units=Unit.objects.all() if request.user.role in DIRECTORY_ROLES else request.user.units.all()
+    users=User.objects.all() if request.user.role in DIRECTORY_ROLES else User.objects.filter(units__in=units).distinct() if request.user.role==Role.HEAD else User.objects.filter(pk=request.user.pk)
     unit_rows=[{'unit':u,**kpis(qs.filter(unit=u))} for u in units]
     employee_rows=[{'user':u,**kpis(qs.filter(Q(owner=u)|Q(participants=u)).distinct())} for u in users]
     return render(request,'core/directory.html',{'unit_rows':unit_rows,'employee_rows':employee_rows,'admin':request.user.role==Role.ADMIN})
@@ -225,8 +235,8 @@ def report_rows(qs,kind,user):
     elif kind=='escalations':
         header=['المهمة','المستلم','المستوى','السبب','التاريخ']; rows=[[e.task.code,str(e.recipient),e.level,e.reason,e.created_at.strftime('%Y-%m-%d')] for e in Escalation.objects.filter(task__in=qs).select_related('task','recipient')]
     else:
-        if kind=='overdue': qs=qs.filter(due_date__lt=timezone.localdate()).exclude(status__in=services.TERMINAL|{Status.APPROVAL,Status.COMPLETED})
-        if kind=='blocked': qs=qs.filter(status=Status.BLOCKED)
+        if kind=='overdue': qs=qs.filter(due_date__lt=timezone.localdate()).exclude(status__in=services.TERMINAL)
+        if kind=='blocked': qs=qs.exclude(status__in=services.TERMINAL).filter(obstacles__resolved_at__isnull=True,obstacles__isnull=False).distinct()
         if kind in ['closed','ontime','duration']: qs=qs.filter(status=Status.CLOSED)
         if kind=='stale': qs=qs.exclude(status__in=services.TERMINAL).filter(updated_at__lt=timezone.now()-timedelta(days=RuleSettings.current().stale_days))
         header=['رقم المهمة','العنوان','الوحدة','المسؤول','المصدر','الحالة','الأولوية','الإنجاز %','الاستحقاق','آخر تحديث','تاريخ التسليم','تاريخ الإغلاق','أيام التأخير','مدة التعثر (أيام)','زمن الإنجاز (أيام)']
@@ -241,6 +251,7 @@ def report_rows(qs,kind,user):
     return header,rows
 @login_required
 def reports(request):
+    require_operational(request.user)
     qs=filter_tasks(request,tasks_for(request.user)); kind=request.GET.get('report','units')
     if kind not in dict(REPORTS): kind='units'
     header,rows=report_rows(qs,kind,request.user)
@@ -264,6 +275,7 @@ def safe_cell(value):
     return "'"+value if isinstance(value,str) and value.startswith(('=','+','-','@')) else value
 @login_required
 def notifications(request):
+    require_operational(request.user)
     if request.method=='POST':
         if request.POST.get('id'): request.user.notifications.filter(pk=request.POST['id']).update(read=True)
         else: request.user.notifications.filter(read=False).update(read=True)
@@ -294,7 +306,7 @@ def catalogs(request):
     error=None
     if request.method=='POST':
         kind=request.POST.get('kind'); key=request.POST.get('key','').strip()[:100]; label=request.POST.get('label','').strip()[:100]; active=request.POST.get('active')=='on'
-        protected={Status.ASSIGNED,Status.ACTIVE,Status.BLOCKED,Status.APPROVAL,Status.RETURNED,Status.CLOSED,Status.CANCELLED}
+        protected={Status.ASSIGNED,Status.ACTIVE,Status.APPROVAL,Status.RETURNED,Status.CLOSED,Status.CANCELLED}
         if kind not in ['status','priority','task_type'] or not key or not label: error='أدخل مفتاحًا واسمًا صحيحين.'
         elif kind=='status' and (key not in Status.values or (key in protected and not active)): error='لا يمكن إضافة حالة خارج سير العمل أو إيقاف حالة أساسية.'
         elif kind=='priority' and (key not in Priority.values or (key==Priority.NORMAL and not active)): error='لا يمكن إيقاف الأولوية الافتراضية أو إضافة مستوى خارج ترتيب الأولويات.'
@@ -306,5 +318,5 @@ def catalogs(request):
 @login_required
 def permissions(request):
     if request.user.role!=Role.ADMIN: raise PermissionDenied()
-    rows=[['مسؤول النظام','جميع الوحدات','نعم','نعم؛ دون الاعتماد الذاتي','المستخدمون والوحدات والقواعد'],['المدير التنفيذي / المساعد','جميع الوحدات','نعم','نعم؛ دون الاعتماد الذاتي','الاجتماعات والقرارات'],['رئيس الوحدة','مهام وحدته والمشارك بها','داخل الوحدة القائدة','داخل الوحدة القائدة','متابعة موظفي الوحدة'],['الموظف','مهامه كمسؤول أو مشارك','لا','لا','تحديث التنفيذ والردود'],['العرض فقط','المهام العادية لوحدته','لا','لا','قراءة وتقارير فقط']]
+    rows=[['مسؤول النظام','المستخدمون والوحدات والإعدادات','لا','لا','إدارة المستخدمين والوحدات والإعدادات فقط'],['المدير التنفيذي / المساعد','جميع الوحدات','نعم','نعم؛ دون الاعتماد الذاتي','الاجتماعات والقرارات'],['رئيس الوحدة','مهام وحدته والمشارك بها','داخل الوحدة القائدة','داخل الوحدة القائدة','متابعة موظفي الوحدة'],['الموظف','مهامه كمسؤول أو مشارك','لا','لا','تحديث التنفيذ والردود'],['العرض فقط','المهام العادية لوحدته','لا','لا','قراءة وتقارير فقط']]
     return render(request,'core/permissions.html',{'rows':rows})

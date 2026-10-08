@@ -20,11 +20,14 @@ class TaskSerializer(serializers.ModelSerializer):
     owner_name=serializers.CharField(source='owner.get_full_name',read_only=True)
     unit_name=serializers.CharField(source='unit.name',read_only=True)
     status_label=serializers.CharField(source='get_status_display',read_only=True)
+    deadline_label=serializers.CharField(read_only=True)
+    is_overdue=serializers.BooleanField(read_only=True)
+    is_blocked=serializers.BooleanField(read_only=True)
     flags=serializers.SerializerMethodField()
     reason=serializers.CharField(write_only=True,required=False)
     class Meta:
         model=Task
-        fields=['id','number','code','title','description','source','task_type','project','unit','unit_name','owner','owner_name','assignment_mode','participants','participating_units','start_date','due_date','priority','confidentiality','status','status_label','progress','auto_progress','expected_result','success_indicator','notes','decision','created_at','updated_at','submitted_at','closed_at','flags','reason']
+        fields=['id','number','code','title','description','source','task_type','project','unit','unit_name','owner','owner_name','assignment_mode','participants','participating_units','start_date','due_date','priority','confidentiality','status','status_label','progress','auto_progress','expected_result','success_indicator','notes','decision','created_at','updated_at','submitted_at','closed_at','flags','deadline_label','is_overdue','is_blocked','reason']
         read_only_fields=['number','status','progress','created_at','updated_at','submitted_at','closed_at']
     def get_flags(self,obj): return services.flags(obj)
     def validate(self,attrs):
@@ -119,7 +122,7 @@ class UnitViewSet(viewsets.ModelViewSet):
     serializer_class=UnitSerializer
     http_method_names=['get','post','patch','put','head','options']
     def get_queryset(self):
-        return Unit.objects.all() if self.request.user.role in GLOBAL_ROLES else self.request.user.units.all()
+        return Unit.objects.all() if self.request.user.role in DIRECTORY_ROLES else self.request.user.units.all()
     def perform_create(self,serializer): self.write(serializer)
     def perform_update(self,serializer): self.write(serializer)
     def write(self,serializer):
@@ -167,6 +170,10 @@ class NotificationSerializer(serializers.ModelSerializer):
 class NotificationViewSet(viewsets.ModelViewSet):
     serializer_class=NotificationSerializer
     http_method_names=['get','patch','head','options']
-    def get_queryset(self): return self.request.user.notifications.all()
+    def get_queryset(self):
+        require_operational(self.request.user)
+        return self.request.user.notifications.all()
 @api_view(['GET'])
-def metrics(request): return Response(kpis(filter_tasks(request,tasks_for(request.user))))
+def metrics(request):
+    require_operational(request.user)
+    return Response(kpis(filter_tasks(request,tasks_for(request.user))))

@@ -1,9 +1,13 @@
 from django.db.models import Q
 from django.core.exceptions import PermissionDenied
 from .models import Task, Role
-GLOBAL_ROLES = {Role.ADMIN,Role.EXECUTIVE,Role.ASSISTANT}
+GLOBAL_ROLES = {Role.EXECUTIVE,Role.ASSISTANT}
+DIRECTORY_ROLES = GLOBAL_ROLES | {Role.ADMIN}
+def require_operational(user):
+    if user.role==Role.ADMIN: raise PermissionDenied('مسؤول النظام مختص بالمستخدمين والوحدات والإعدادات.')
 def tasks_for(user):
-    qs=Task.objects.select_related('owner','unit','decision','decision__meeting').prefetch_related('participants','participating_units')
+    qs=Task.objects.select_related('owner','unit','decision','decision__meeting').prefetch_related('participants','participating_units','obstacles')
+    if user.role==Role.ADMIN: return qs.none()
     if user.role in GLOBAL_ROLES: return qs
     direct=Q(owner=user)|Q(participants=user)
     unit_ids=user.units.values_list('pk',flat=True)
@@ -17,7 +21,7 @@ def tasks_for(user):
 def can_manage(user,task=None):
     return user.role in GLOBAL_ROLES or (user.role==Role.HEAD and (task is None or task.unit.head_id==user.pk))
 def can_work(user,task):
-    return user.role!=Role.VIEWER and (can_manage(user,task) or task.owner_id==user.pk or task.participants.filter(pk=user.pk).exists())
+    return user.role not in {Role.VIEWER,Role.ADMIN} and (can_manage(user,task) or task.owner_id==user.pk or task.participants.filter(pk=user.pk).exists())
 def require_work(user,task):
     if not can_work(user,task): raise PermissionDenied('لا تملك صلاحية تحديث هذه المهمة.')
 def require_manage(user,task=None):

@@ -10,13 +10,11 @@ from .policy import *
 TERMINAL={Status.CLOSED,Status.CANCELLED}
 TRANSITIONS={
  Status.NEW:{Status.ASSIGNED,Status.CANCELLED},
- Status.ASSIGNED:{Status.ACTIVE,Status.WAITING,Status.EXTERNAL,Status.BLOCKED,Status.PAUSED,Status.CANCELLED},
- Status.ACTIVE:{Status.WAITING,Status.EXTERNAL,Status.BLOCKED,Status.PAUSED,Status.CANCELLED},
- Status.WAITING:{Status.ACTIVE,Status.BLOCKED,Status.EXTERNAL,Status.PAUSED,Status.CANCELLED},
- Status.EXTERNAL:{Status.ACTIVE,Status.BLOCKED,Status.PAUSED,Status.CANCELLED},
- Status.BLOCKED:{Status.ACTIVE,Status.WAITING,Status.EXTERNAL,Status.PAUSED,Status.CANCELLED},
- Status.OVERDUE:{Status.ACTIVE,Status.BLOCKED,Status.WAITING,Status.EXTERNAL,Status.PAUSED,Status.CANCELLED},
- Status.RETURNED:{Status.ACTIVE,Status.BLOCKED,Status.WAITING,Status.PAUSED,Status.CANCELLED},
+ Status.ASSIGNED:{Status.ACTIVE,Status.WAITING,Status.EXTERNAL,Status.PAUSED,Status.CANCELLED},
+ Status.ACTIVE:{Status.WAITING,Status.EXTERNAL,Status.PAUSED,Status.CANCELLED},
+ Status.WAITING:{Status.ACTIVE,Status.EXTERNAL,Status.PAUSED,Status.CANCELLED},
+ Status.EXTERNAL:{Status.ACTIVE,Status.PAUSED,Status.CANCELLED},
+ Status.RETURNED:{Status.ACTIVE,Status.WAITING,Status.PAUSED,Status.CANCELLED},
  Status.PAUSED:{Status.ACTIVE,Status.CANCELLED},
  Status.COMPLETED:{Status.APPROVAL},Status.APPROVAL:{Status.CLOSED,Status.RETURNED},
  Status.CLOSED:set(),Status.CANCELLED:set()}
@@ -30,13 +28,13 @@ def audit(task,user,action,old=None,new=None):
 def assignment_members(task,participants):
     ids={u.pk for u in participants}
     unit_ids=[task.unit_id] if task.assignment_mode=='unit' else [task.unit_id,*task.participating_units.values_list('pk',flat=True)] if task.assignment_mode=='units' else []
-    if unit_ids: ids.update(User.objects.filter(units__pk__in=unit_ids,is_active=True).exclude(role=Role.VIEWER).values_list('pk',flat=True))
+    if unit_ids: ids.update(User.objects.filter(units__pk__in=unit_ids,is_active=True).exclude(role__in=[Role.VIEWER,Role.ADMIN]).values_list('pk',flat=True))
     ids.discard(task.owner_id)
-    return User.objects.filter(pk__in=ids,is_active=True).distinct()
+    return User.objects.filter(pk__in=ids,is_active=True).exclude(role=Role.ADMIN).distinct()
 def recipients(task):
     ids={task.owner_id,*task.participants.values_list('pk',flat=True)}
     if task.unit.head_id: ids.add(task.unit.head_id)
-    return User.objects.filter(pk__in=ids,is_active=True)
+    return User.objects.filter(pk__in=ids,is_active=True).exclude(role=Role.ADMIN)
 def notify(task,text,users=None,key=None):
     for user in users if users is not None else recipients(task):
         unique=f'{key}:{user.pk}' if key else None
@@ -47,7 +45,7 @@ def create_task(user,data,participants=(),units=()):
     require_manage(user)
     task=Task(created_by=user,**data)
     if user.role==Role.HEAD and task.unit.head_id!=user.pk: raise PermissionDenied('الإسناد خارج الوحدة غير مصرح.')
-    if not task.owner.is_active or task.owner.role==Role.VIEWER: raise ValidationError('المسؤول الرئيسي يجب أن يكون حسابًا نشطًا له صلاحية التنفيذ.')
+    if not task.owner.is_active or task.owner.role in {Role.VIEWER,Role.ADMIN}: raise ValidationError('المسؤول الرئيسي يجب أن يكون حسابًا نشطًا له صلاحية التنفيذ.')
     if Catalog.objects.filter(kind='priority',key=task.priority,active=False).exists(): raise ValidationError('الأولوية غير مفعلة للتكليفات الجديدة.')
     if Catalog.objects.filter(kind='task_type').exists() and not Catalog.objects.filter(kind='task_type',key=task.task_type,active=True).exists(): raise ValidationError('نوع المهمة غير مفعل.')
     task.full_clean()
@@ -122,7 +120,7 @@ def report_obstacle(user,task,data):
     target=data['intervention_owner']
     if not tasks_for(target).filter(pk=task.pk).exists(): raise ValidationError('المطلوب تدخله يجب أن يملك صلاحية الاطلاع على المهمة.')
     obstacle=Obstacle(task=task,reported_by=user,**data); obstacle.full_clean(); obstacle.save()
-    old=task.status; task.status=Status.BLOCKED; task.updated_at=timezone.now(); task.save()
+    old=task.status; task.updated_at=timezone.now(); task.save(update_fields=['updated_at'])
     audit(task,user,'تسجيل عائق',{'status':old},{'status':task.status,'obstacle':obstacle.pk,'description':obstacle.description})
     notify(task,f'{task.code}: تسجيل تعثر — {obstacle.kind}')
     notify(task,f'{task.code}: مطلوب تدخلك لمعالجة العائق',[target])
@@ -135,8 +133,7 @@ def resolve_obstacle(user,obstacle,resolution):
     if not resolution.strip(): raise ValidationError('وصف المعالجة مطلوب.')
     obstacle.resolution=resolution; obstacle.resolved_at=timezone.now(); obstacle.save()
     old=task.status
-    if not task.obstacles.filter(resolved_at__isnull=True).exists() and task.status==Status.BLOCKED:
-        task.status=Status.ACTIVE; task.updated_at=timezone.now(); task.save()
+    task.updated_at=timezone.now(); task.save(update_fields=['updated_at'])
     audit(task,user,'معالجة العائق',{'status':old},{'status':task.status,'obstacle':obstacle.pk,'resolution':resolution})
     notify(task,f'{task.code}: تمت معالجة العائق')
 def validate_upload(upload):
@@ -209,8 +206,8 @@ def flags(task,rules=None,today=None):
     r=rules or RuleSettings.current(); today=today or timezone.localdate()
     if task.status in TERMINAL: return []
     result=[]
-    if task.is_overdue: result.append('متأخرة')
-    if task.status==Status.BLOCKED: result.append('متعثرة')
+    if task.due_date<today: result.append('متأخرة')
+    if task.is_blocked: result.append('متعثرة')
     if (today-task.updated_at.date()).days>=r.stale_days: result.append('بدون تحديث')
     duration=max((task.due_date-task.start_date).days,1)
     elapsed=max(0,(today-task.start_date).days)/duration*100
@@ -221,15 +218,12 @@ def flags(task,rules=None,today=None):
 def run_rules(today=None):
     today=today or timezone.localdate(); r=RuleSettings.current(); count=0
     for task in Task.objects.select_for_update().exclude(status__in=TERMINAL).select_related('unit','owner'):
-        if task.due_date<today and task.status not in {Status.APPROVAL,Status.COMPLETED,Status.BLOCKED,Status.OVERDUE,Status.PAUSED}:
-            old=task.status; task.status=Status.OVERDUE; task.save(update_fields=['status'])
-            audit(task,None,'تجاوز موعد الاستحقاق',{'status':old},{'status':task.status}); count+=1
         for flag in flags(task,r,today): notify(task,f'{task.code}: {flag}',key=f'flag:{task.pk}:{flag}:{today}')
         if task.status in {Status.APPROVAL,Status.COMPLETED}: continue
         days=(task.due_date-today).days
         if 0<=days<=r.remind_days:
             targets=recipients(task) if days==0 else User.objects.filter(pk__in=[task.owner_id,*task.participants.values_list('pk',flat=True)],is_active=True)
-            notify(task,f'{task.code}: تستحق خلال {days} يوم',targets,key=f'due:{task.pk}:{today}')
+            notify(task,f'{task.code}: '+('تستحق اليوم' if days==0 else f'تستحق خلال {days} يوم'),targets,key=f'due:{task.pk}:{today}')
         late=-days
         factor=r.critical_multiplier if task.priority==Priority.CRITICAL else 1
         levels=[(1,max(1,math.ceil(r.head_after*factor)),[task.unit.head] if task.unit.head else []),(2,max(1,math.ceil(r.assistant_after*factor)),list(User.objects.filter(role=Role.ASSISTANT,is_active=True))),(3,max(1,math.ceil(r.executive_after*factor)),list(User.objects.filter(role=Role.EXECUTIVE,is_active=True)))]

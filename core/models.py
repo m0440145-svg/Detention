@@ -60,8 +60,6 @@ class Status(models.TextChoices):
     ACTIVE='active','قيد التنفيذ'
     WAITING='waiting','بانتظار رد'
     EXTERNAL='external','بانتظار جهة خارجية'
-    BLOCKED='blocked','متعثرة'
-    OVERDUE='overdue','متأخرة'
     COMPLETED='completed','مكتملة'
     APPROVAL='approval','بانتظار الاعتماد'
     RETURNED='returned','معادة للتنفيذ'
@@ -115,16 +113,27 @@ class Task(models.Model):
     closed_at=models.DateTimeField(null=True,blank=True)
     class Meta:
         ordering=['due_date','id']
-        constraints=[models.CheckConstraint(condition=models.Q(progress__lte=100),name='task_progress_max'),models.CheckConstraint(condition=models.Q(due_date__gte=models.F('start_date')),name='task_dates_order')]
+        constraints=[models.CheckConstraint(condition=models.Q(status__in=Status.values),name='task_lifecycle_status'),models.CheckConstraint(condition=models.Q(progress__lte=100),name='task_progress_max'),models.CheckConstraint(condition=models.Q(due_date__gte=models.F('start_date')),name='task_dates_order')]
         indexes=[models.Index(fields=['unit','status']),models.Index(fields=['owner','status'])]
     @property
     def code(self): return f'TSK-{self.pk:05d}' if self.pk else 'جديدة'
     @property
     def days_remaining(self): return (self.due_date-timezone.localdate()).days
     @property
-    def is_overdue(self): return self.due_date<timezone.localdate() and self.status not in [Status.CLOSED,Status.CANCELLED,Status.APPROVAL,Status.COMPLETED]
+    def is_overdue(self): return self.due_date<timezone.localdate() and self.status not in [Status.CLOSED,Status.CANCELLED]
+    @property
+    def deadline_label(self):
+        if self.status in [Status.CLOSED,Status.CANCELLED]: return ''
+        days=self.days_remaining
+        if days<0: return f'متأخرة {-days} يوم'
+        if days==0: return 'تستحق اليوم'
+        return f'متبقي {days} يوم'
+    @property
+    def is_blocked(self):
+        return self.status not in [Status.CLOSED,Status.CANCELLED] and any(o.resolved_at is None for o in self.obstacles.all())
     def clean(self):
         if self.due_date and self.start_date and self.due_date<self.start_date: raise ValidationError('موعد الاستحقاق يجب أن يلي تاريخ البدء.')
+        if self.owner_id and (not self.owner.is_active or self.owner.role in {Role.ADMIN,Role.VIEWER}): raise ValidationError('المسؤول الرئيسي يجب أن يكون حسابًا نشطًا له صلاحية التنفيذ.')
         if self.owner_id and self.unit_id and not self.owner.units.filter(pk=self.unit_id).exists(): raise ValidationError('المسؤول الرئيسي يجب أن ينتمي للوحدة القائدة.')
     def get_status_display(self): return Catalog.objects.filter(kind='status',key=self.status).values_list('label',flat=True).first() or Status(self.status).label
     def get_priority_display(self): return Catalog.objects.filter(kind='priority',key=self.priority).values_list('label',flat=True).first() or Priority(self.priority).label

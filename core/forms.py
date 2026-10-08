@@ -11,7 +11,7 @@ class TaskForm(forms.ModelForm):
         widgets={k:forms.DateInput(attrs={'type':'date'}) for k in ['start_date','due_date']}
     def __init__(self,*args,user,**kwargs):
         super().__init__(*args,**kwargs)
-        self.fields['owner'].queryset=User.objects.filter(is_active=True).exclude(role=Role.VIEWER)
+        self.fields['owner'].queryset=User.objects.filter(is_active=True).exclude(role__in=[Role.VIEWER,Role.ADMIN])
         self.fields['participants'].queryset=self.fields['owner'].queryset
         self.fields['unit'].queryset=Unit.objects.filter(active=True)
         if user.role==Role.HEAD:
@@ -48,7 +48,7 @@ class ObstacleForm(forms.ModelForm):
     def __init__(self,*args,task,**kwargs):
         super().__init__(*args,**kwargs)
         from .policy import tasks_for
-        ids=[u.pk for u in User.objects.filter(is_active=True).exclude(role=Role.VIEWER) if tasks_for(u).filter(pk=task.pk).exists()]
+        ids=[u.pk for u in User.objects.filter(is_active=True).exclude(role__in=[Role.VIEWER,Role.ADMIN]) if tasks_for(u).filter(pk=task.pk).exists()]
         self.fields['intervention_owner'].queryset=User.objects.filter(pk__in=ids)
 class SubtaskForm(forms.ModelForm):
     class Meta:
