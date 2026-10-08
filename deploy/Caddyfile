@@ -1,0 +1,12 @@
+{$SITE_DOMAIN} {
+    encode zstd gzip
+    header {
+        Referrer-Policy "same-origin"
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+        Content-Security-Policy "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    }
+    request_body {
+        max_size 12MB
+    }
+    reverse_proxy web:8000
+}

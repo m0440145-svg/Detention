@@ -1,0 +1,1 @@
+<div class="pagination"><span>الصفحة {{ page.number }} من {{ page.paginator.num_pages }}</span>{% if page.has_previous %}<a data-page="{{ page.previous_page_number }}" href="?page={{ page.previous_page_number }}">السابق</a>{% endif %}{% if page.has_next %}<a data-page="{{ page.next_page_number }}" href="?page={{ page.next_page_number }}">التالي</a>{% endif %}</div>
