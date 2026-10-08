@@ -29,8 +29,18 @@ with tempfile.TemporaryDirectory() as temp:
  meeting=Meeting.objects.create(number='LEGACY-MTG',name='اجتماع سابق',committee='لجنة',date=today)
  decision=Decision.objects.create(number='LEGACY-DEC',meeting=meeting,text='قرار سابق',date=today,followup_owner=u)
  legacy=Audit.objects.create(actor=u,action='حفظ قرار اجتماع',new={'id':decision.pk})
+ executor=MigrationExecutor(connection);executor.migrate([('core','0006_decision_governance')])
+ latest=executor.loader.project_state([('core','0006_decision_governance')]).apps
+ PreviousTask=latest.get_model('core','Task'); PreviousObstacle=latest.get_model('core','Obstacle')
+ inconsistent=[]
+ for state,progress in [('active',100),('approval',20),('closed',50),('active',100)]:
+  item=PreviousTask.objects.create(title='اتساق',description='اختبار',unit_id=unit.pk,owner_id=u.pk,created_by_id=u.pk,start_date=today,due_date=today,expected_result='نتيجة',success_indicator='مؤشر',status=state,progress=progress)
+  inconsistent.append(item.pk)
+ PreviousObstacle.objects.create(task_id=inconsistent[-1],reported_by_id=u.pk,kind='نقص موارد',description='عائق قديم',caused_by='المورد',requested_action='تدخل',intervention_owner_id=u.pk,expected_resolution=today,impact='high')
  executor=MigrationExecutor(connection);executor.migrate(executor.loader.graph.leaf_nodes())
  from core.models import Task as NewTask,Audit as NewAudit,Catalog as NewCatalog,Decision as NewDecision
+ assert list(NewTask.objects.filter(pk__in=inconsistent).order_by('pk').values_list('status','progress'))==[('approval',100),('active',20),('returned',50),('returned',99)]
+ assert NewAudit.objects.filter(action='تصحيح تعارض الحالة ونسبة الإنجاز').count()==4
  assert list(NewTask.objects.filter(pk__in=ids).order_by('pk').values_list('status',flat=True))==['waiting','external','assigned','approval']
  for pk,snapshots in original.items():
   a=NewAudit.objects.get(pk=pk);assert (a.old,a.new)==snapshots

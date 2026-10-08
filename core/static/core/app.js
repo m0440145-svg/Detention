@@ -9,3 +9,5 @@ document.querySelectorAll('[data-export]').forEach(a=>{const u=new URL(location.
 document.querySelectorAll('[data-page]').forEach(a=>{const u=new URL(location.href);u.searchParams.set('page',a.dataset.page);a.href=u.toString();});
 document.querySelector('[data-print]')?.addEventListener('click',()=>window.print());
 
+
+document.querySelectorAll("[data-bulk-task]").forEach(box=>box.addEventListener("change",()=>{document.querySelectorAll("[data-bulk-task]").forEach(other=>{if(other.dataset.bulkTask===box.dataset.bulkTask)other.checked=box.checked;});}));

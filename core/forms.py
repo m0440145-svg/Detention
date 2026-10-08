@@ -11,7 +11,9 @@ class TaskForm(forms.ModelForm):
         widgets={k:forms.DateInput(attrs={'type':'date'}) for k in ['start_date','due_date']}
     def __init__(self,*args,user,**kwargs):
         super().__init__(*args,**kwargs)
-        self.fields['owner'].queryset=User.objects.filter(is_active=True).exclude(role__in=[Role.VIEWER,Role.ADMIN])
+        self.fields['reason'].required=bool(self.instance.pk)
+        self.fields['reason'].help_text='إلزامي عند تعديل المهمة، بما فيه تمديد الاستحقاق.'
+        self.fields['owner'].queryset=User.objects.filter(is_active=True).exclude(role__in=[Role.VIEWER,Role.ADMIN,Role.BOARD])
         self.fields['participants'].queryset=self.fields['owner'].queryset
         self.fields['unit'].queryset=Unit.objects.filter(active=True)
         if user.role==Role.HEAD:
@@ -42,13 +44,14 @@ class CommentForm(forms.Form):
 class ObstacleForm(forms.ModelForm):
     class Meta:
         model=Obstacle
-        fields=['kind','description','caused_by','needs_decision','requested_action','intervention_owner','expected_resolution','impact']
-        labels={'kind':'نوع العائق','description':'وصف المشكلة','caused_by':'الجهة المسببة','needs_decision':'يحتاج قرارًا إداريًا','requested_action':'الإجراء المطلوب','intervention_owner':'المطلوب تدخله','expected_resolution':'الحل المتوقع','impact':'درجة التأثير'}
+        fields=['kind','description','reason','caused_by','needs_decision','requested_action','intervention_owner','expected_resolution','impact']
+        labels={'kind':'نوع العائق','description':'وصف المشكلة','reason':'سبب التعثر','caused_by':'الجهة المسببة','needs_decision':'يحتاج قرارًا إداريًا','requested_action':'الإجراء المطلوب','intervention_owner':'المطلوب تدخله','expected_resolution':'الحل المتوقع','impact':'درجة التأثير'}
         widgets={'expected_resolution':forms.DateInput(attrs={'type':'date'}),'description':forms.Textarea(attrs={'rows':2}),'requested_action':forms.Textarea(attrs={'rows':2})}
     def __init__(self,*args,task,**kwargs):
         super().__init__(*args,**kwargs)
+        self.fields['reason'].required=True
         from .policy import tasks_for
-        ids=[u.pk for u in User.objects.filter(is_active=True).exclude(role__in=[Role.VIEWER,Role.ADMIN]) if tasks_for(u).filter(pk=task.pk).exists()]
+        ids=[u.pk for u in User.objects.filter(is_active=True).exclude(role__in=[Role.VIEWER,Role.ADMIN,Role.BOARD]) if tasks_for(u).filter(pk=task.pk).exists()]
         self.fields['intervention_owner'].queryset=User.objects.filter(pk__in=ids)
 class SubtaskForm(forms.ModelForm):
     class Meta:

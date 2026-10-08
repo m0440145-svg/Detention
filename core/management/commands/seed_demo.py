@@ -36,10 +36,11 @@ class Command(BaseCommand):
                 services.update_progress(owner,task,100,'اكتمل التنفيذ التجريبي','إنجاز وتسليم المخرج','لا يوجد'); task.refresh_from_db(); services.change_status(unit.head,task,Status.CLOSED,'اعتماد مخرج تجريبي')
             elif mode==1: services.update_progress(owner,task,100,'طلب اعتماد تجريبي','اكتمل العمل','لا يوجد')
             elif mode==2:
-                services.report_obstacle(owner,task,{'kind':'انتظار اعتماد','description':'اعتماد مورد مطلوب — تجريبي','caused_by':'وحدة أخرى','needs_decision':True,'requested_action':'مراجعة الطلب وتحديد الإجراء','intervention_owner':unit.head,'expected_resolution':today+timedelta(days=2),'impact':'high'})
+                services.report_obstacle(owner,task,{'kind':'انتظار اعتماد','description':'اعتماد مورد مطلوب — تجريبي','reason':'انتظار اعتماد المورد — تجريبي','caused_by':'وحدة أخرى','needs_decision':True,'requested_action':'مراجعة الطلب وتحديد الإجراء','intervention_owner':unit.head,'expected_resolution':today+timedelta(days=2),'impact':'high'})
             else: services.update_progress(owner,task,[25,50,75,10][mode-3],'تحديث تجريبي','تنفيذ جزء من المطلوب','استكمال المخرج')
             services.add_comment(owner,task,'تحديث تجريبي: تم بدء التنسيق مع فريق العمل.')
             if i%4==0: Task.objects.filter(pk=task.pk).update(updated_at=timezone.now()-timedelta(days=6))
         services.run_rules(); RuleSettings.current()
         viewer=User.objects.create_user(username='demo-viewer',email='demo-viewer@example.invalid',password=password,employee_number='DEMO-VIEW',first_name='مراقب',last_name='تجريبي',role=Role.VIEWER); viewer.units.add(units[4])
-        self.stdout.write(self.style.SUCCESS(f'Created {len(units)} units, {len(users)+1} users, 30 tasks and 3 decisions. Accounts: demo-admin, demo-01 (executive), demo-03 (head), demo-09 (employee), demo-viewer.'))
+        User.objects.create_user(username='demo-board',email='demo-board@example.invalid',password=password,employee_number='DEMO-BOARD',first_name='أمين',last_name='المجلس',role=Role.BOARD)
+        self.stdout.write(self.style.SUCCESS(f'Created {len(units)} units, {len(users)+2} users, 30 tasks and 3 decisions. Accounts: demo-admin, demo-01 (executive), demo-03 (head), demo-09 (employee), demo-viewer, demo-board.'))

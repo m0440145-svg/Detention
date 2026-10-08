@@ -53,8 +53,9 @@ class CommentSerializer(serializers.ModelSerializer):
 class ObstacleSerializer(serializers.ModelSerializer):
     class Meta:
         model=Obstacle
-        fields=['id','kind','description','caused_by','needs_decision','requested_action','intervention_owner','expected_resolution','impact','reported_by','created_at','resolved_at','resolution']
+        fields=['id','kind','description','reason','caused_by','needs_decision','requested_action','intervention_owner','expected_resolution','impact','reported_by','created_at','resolved_at','resolution']
         read_only_fields=['id','reported_by','created_at','resolved_at','resolution']
+        extra_kwargs={'reason':{'required':True,'allow_blank':False}}
 class SubtaskSerializer(serializers.ModelSerializer):
     class Meta:
         model=Subtask
@@ -144,7 +145,7 @@ class DecisionSerializer(serializers.ModelSerializer):
         read_only_fields=['approved_minutes_attachment']
     def get_progress(self,obj): return decision_metrics(self.context['request'].user,obj)['progress']
     def get_approved_progress(self,obj): return decision_metrics(self.context['request'].user,obj)['approved_progress']
-    def get_metric_scope(self,obj): return 'all' if self.context['request'].user.role in GLOBAL_ROLES else 'visible'
+    def get_metric_scope(self,obj): return 'all' if self.context['request'].user.role in DECISION_READ_ROLES else 'visible'
     def create(self,data):
         reason=data.pop('reason',''); upload=data.pop('minutes_file',None)
         return services.save_decision(self.context['request'].user,data,reason=reason,minutes_file=upload)
@@ -200,3 +201,13 @@ class NotificationViewSet(viewsets.ModelViewSet):
 def metrics(request):
     require_operational(request.user)
     return Response(kpis(filter_tasks(request,tasks_for(request.user))))
+
+
+class BulkFollowupSerializer(serializers.Serializer):
+    task_ids=serializers.ListField(child=serializers.IntegerField(min_value=1),min_length=1,max_length=100)
+    action=serializers.ChoiceField(choices=['remind','escalate'])
+    reason=serializers.CharField(allow_blank=False)
+@api_view(['POST'])
+def bulk_followup(request):
+    serializer=BulkFollowupSerializer(data=request.data); serializer.is_valid(raise_exception=True)
+    return Response(services.bulk_followup(request.user,**serializer.validated_data))

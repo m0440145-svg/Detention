@@ -12,6 +12,7 @@ class Role(models.TextChoices):
     HEAD='head','رئيس الوحدة'
     EMPLOYEE='employee','موظف'
     VIEWER='viewer','عرض فقط'
+    BOARD='board','مجلس الإدارة / أمين المجلس'
 class User(AbstractUser):
     REQUIRED_FIELDS = ['email','employee_number']
     email=models.EmailField(unique=True)
@@ -129,7 +130,7 @@ class Task(models.Model):
     closed_at=models.DateTimeField(null=True,blank=True)
     class Meta:
         ordering=['due_date','id']
-        constraints=[models.CheckConstraint(condition=models.Q(status__in=Status.values),name='task_lifecycle_status'),models.CheckConstraint(condition=models.Q(progress__lte=100),name='task_progress_max'),models.CheckConstraint(condition=models.Q(due_date__gte=models.F('start_date')),name='task_dates_order')]
+        constraints=[models.CheckConstraint(condition=(models.Q(status__in=[Status.APPROVAL,Status.COMPLETED,Status.CLOSED],progress=100)|models.Q(status=Status.CANCELLED)|(~models.Q(status__in=[Status.APPROVAL,Status.COMPLETED,Status.CLOSED,Status.CANCELLED]) & models.Q(progress__lt=100))),name='task_status_progress_consistent'),models.CheckConstraint(condition=models.Q(status__in=Status.values),name='task_lifecycle_status'),models.CheckConstraint(condition=models.Q(progress__lte=100),name='task_progress_max'),models.CheckConstraint(condition=models.Q(due_date__gte=models.F('start_date')),name='task_dates_order')]
         indexes=[models.Index(fields=['unit','status']),models.Index(fields=['owner','status'])]
     @property
     def code(self): return f'TSK-{self.pk:05d}' if self.pk else 'جديدة'
@@ -147,9 +148,13 @@ class Task(models.Model):
     @property
     def is_blocked(self):
         return self.status not in [Status.CLOSED,Status.CANCELLED] and any(o.resolved_at is None for o in self.obstacles.all())
+    def validate_status_progress(self):
+        if self.status in [Status.APPROVAL,Status.COMPLETED,Status.CLOSED] and self.progress!=100: raise ValidationError('الاعتماد والإكمال والإغلاق تتطلب نسبة 100%.')
+        if self.progress==100 and self.status not in [Status.APPROVAL,Status.COMPLETED,Status.CLOSED,Status.CANCELLED]: raise ValidationError('نسبة 100% تستلزم انتظار الاعتماد أو الإكمال أو الإغلاق.')
     def clean(self):
+        self.validate_status_progress()
         if self.due_date and self.start_date and self.due_date<self.start_date: raise ValidationError('موعد الاستحقاق يجب أن يلي تاريخ البدء.')
-        if self.owner_id and (not self.owner.is_active or self.owner.role in {Role.ADMIN,Role.VIEWER}): raise ValidationError('المسؤول الرئيسي يجب أن يكون حسابًا نشطًا له صلاحية التنفيذ.')
+        if self.owner_id and (not self.owner.is_active or self.owner.role in {Role.ADMIN,Role.VIEWER,Role.BOARD}): raise ValidationError('المسؤول الرئيسي يجب أن يكون حسابًا نشطًا له صلاحية التنفيذ.')
         if self.owner_id and self.unit_id and not self.owner.units.filter(pk=self.unit_id).exists(): raise ValidationError('المسؤول الرئيسي يجب أن ينتمي للوحدة القائدة.')
     def get_status_display(self): return Catalog.objects.filter(kind='status',key=self.status).values_list('label',flat=True).first() or Status(self.status).label
     def get_priority_display(self): return Catalog.objects.filter(kind='priority',key=self.priority).values_list('label',flat=True).first() or Priority(self.priority).label
@@ -195,6 +200,7 @@ class Obstacle(models.Model):
     reported_by=models.ForeignKey(User,on_delete=models.PROTECT,related_name='reported_obstacles')
     kind=models.CharField(max_length=100,choices=TYPES)
     description=models.TextField()
+    reason=models.TextField(blank=True,default='')
     caused_by=models.CharField(max_length=200)
     needs_decision=models.BooleanField(default=False)
     requested_action=models.TextField()

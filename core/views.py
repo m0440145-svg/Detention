@@ -69,6 +69,7 @@ def choices(user):
     return {'units':Unit.objects.filter(pk__in=visible.values('unit_id')),'employees':User.objects.filter(pk__in=visible.values('owner_id')),'statuses':Status.choices,'priorities':Priority.choices,'sources':Source.choices}
 @login_required
 def dashboard(request):
+    if request.user.role==Role.BOARD: return redirect('decisions')
     if request.user.role==Role.ADMIN:
         return render(request,'core/admin_dashboard.html',{'users_count':User.objects.count(),'active_users':User.objects.filter(is_active=True).count(),'units_count':Unit.objects.count(),'active_units':Unit.objects.filter(active=True).count()})
     qs=tasks_for(request.user); today=timezone.localdate()
@@ -81,7 +82,7 @@ def dashboard(request):
     return render(request,'core/dashboard.html',{'kpi':kpis(qs),'unit_rows':sorted(rows,key=lambda r:r['completion'],reverse=True),'employee_rows':employees,'decision_obstacles':Obstacle.objects.filter(task__in=qs,needs_decision=True,resolved_at__isnull=True).select_related('task','intervention_owner')[:5],'late_week':qs.filter(due_date__lt=today-timedelta(days=7)).exclude(status__in=services.TERMINAL).count(),'today_tasks':qs.filter(due_date=today)[:8],'urgent_tasks':qs.filter(priority=Priority.CRITICAL).exclude(status__in=services.TERMINAL)[:6],'recent_comments':Comment.objects.filter(task__in=qs).select_related('user','task').order_by('-created_at')[:5],'notifications':request.user.notifications.all()[:5]})
 @login_required
 def task_list(request):
-    require_operational(request.user)
+    require_execution_space(request.user)
     qs=filter_tasks(request,tasks_for(request.user))
     scope=request.GET.get('scope')
     if scope=='mine': qs=qs.filter(Q(owner=request.user)|Q(participants=request.user)).distinct()
@@ -89,7 +90,7 @@ def task_list(request):
     return render(request,'core/tasks.html',{'page':Paginator(qs,20).get_page(request.GET.get('page')), 'title':'المهام والتكليفات',**choices(request.user)})
 @login_required
 def task_form(request,pk=None):
-    require_operational(request.user)
+    require_execution_space(request.user)
     task=get_object_or_404(tasks_for(request.user),pk=pk) if pk else None
     require_manage(request.user,task)
     initial={}
@@ -151,32 +152,50 @@ def task_detail(request,pk):
     if not can_manage(request.user,task): statuses=statuses-{Status.CLOSED,Status.RETURNED,Status.CANCELLED,Status.PAUSED}
     return render(request,'core/detail.html',{'task':task,'error':error,'can_work':can_work(request.user,task),'can_manage':can_manage(request.user,task),'next_statuses':[(s,Catalog.objects.filter(kind='status',key=s).values_list('label',flat=True).first() or Status(s).label) for s in statuses if not Catalog.objects.filter(kind='status',key=s,active=False).exists()],'progress_form':ProgressForm(initial={'progress':task.progress}),'comment_form':CommentForm(task=task),'obstacle_form':ObstacleForm(task=task),'subtask_form':SubtaskForm(),'flags':services.flags(task),'activities':task.activities.select_related('actor'),'comments':task.comments.select_related('user','parent').prefetch_related('mentions','mentioned_units','attachments').order_by('created_at')})
 FOLLOW_TABS=[('overdue','المتأخرة'),('blocked','المتعثرة'),('today','تستحق اليوم'),('soon','خلال 3 أيام'),('stale','بدون تحديث'),('waiting','بانتظار رد'),('approval','بانتظار اعتماد'),('critical','الحرجة'),('escalated','المصعدة'),('returned','المعادة'),('risk','مرشحة للتعثر')]
+RISK_GROUPS=[('overdue','متأخرة','تجاوزت تاريخ الاستحقاق'),('blocked','متعثرة','عوائق مفتوحة تحتاج معالجة'),('stale','بدون تحديث','لم تسجل تحديثًا خلال المدة المحددة'),('escalated','مصعّدة','أُحيلت للتدخل الإداري')]
+def risk_tasks(qs,kind,today=None):
+    today=today or timezone.localdate()
+    if kind=='overdue': return qs.filter(due_date__lt=today)
+    if kind=='blocked': return qs.filter(obstacles__resolved_at__isnull=True,obstacles__isnull=False).distinct()
+    if kind=='stale': return qs.filter(updated_at__lt=timezone.now()-timedelta(days=RuleSettings.current().stale_days))
+    if kind=='escalated': return qs.filter(escalations__isnull=False).distinct()
+    if kind=='today': return qs.filter(due_date=today)
+    if kind=='soon': return qs.filter(due_date__range=(today,today+timedelta(days=3)))
+    if kind=='critical': return qs.filter(priority=Priority.CRITICAL)
+    if kind=='risk': return qs.filter(pk__in=[t.pk for t in qs if 'مرشحة للتعثر' in services.flags(t)])
+    return qs.filter(status=kind) if kind in Status.values else qs.none()
 @login_required
 def followup(request):
-    require_operational(request.user)
-    qs=filter_tasks(request,tasks_for(request.user)).exclude(status__in=services.TERMINAL); today=timezone.localdate(); tab=request.GET.get('tab','overdue')
-    if tab=='overdue': qs=qs.filter(due_date__lt=today)
-    elif tab=='blocked': qs=qs.filter(obstacles__resolved_at__isnull=True,obstacles__isnull=False).distinct()
-    elif tab=='today': qs=qs.filter(due_date=today)
-    elif tab=='soon': qs=qs.filter(due_date__range=(today,today+timedelta(days=3)))
-    elif tab=='stale': qs=qs.filter(updated_at__lt=timezone.now()-timedelta(days=RuleSettings.current().stale_days))
-    elif tab=='critical': qs=qs.filter(priority=Priority.CRITICAL)
-    elif tab=='escalated': qs=qs.filter(escalations__isnull=False).distinct()
-    elif tab=='risk': qs=qs.filter(pk__in=[t.pk for t in qs if 'مرشحة للتعثر' in services.flags(t)])
-    else: qs=qs.filter(status=tab) if tab in Status.values else qs.none()
-    return render(request,'core/tasks.html',{'page':Paginator(qs,20).get_page(request.GET.get('page')),'title':'مركز المتابعة','tabs':FOLLOW_TABS,'tab':tab,**choices(request.user)})
+    require_execution_space(request.user)
+    error=None
+    if request.method=='POST':
+        try:
+            result=services.bulk_followup(request.user,request.POST.getlist('task_ids'),request.POST.get('action',''),request.POST.get('reason',''))
+            messages.success(request,f"تمت متابعة {result['processed']} مهمة، وتجاوز {result['skipped']} إجراء مكرر اليوم.")
+            return redirect('followup')
+        except ValidationError as exc: error=' — '.join(exc.messages)
+    qs=filter_tasks(request,tasks_for(request.user)).exclude(status__in=services.TERMINAL)
+    tab=request.GET.get('tab','all')
+    definitions=RISK_GROUPS if tab=='all' else [(tab,dict(FOLLOW_TABS).get(tab,'المتابعة'),'عرض ضمن نطاق الصلاحيات')]
+    groups=[]
+    for key,title,description in definitions:
+        selected=risk_tasks(qs,key)
+        page=Paginator(selected,20).get_page(request.GET.get('page'))
+        for task in page: task.bulk_allowed=can_manage(request.user,task)
+        groups.append({'key':key,'title':title,'description':description,'count':page.paginator.count,'page':page})
+    return render(request,'core/followup.html',{'groups':groups,'page':groups[0]['page'],'tabs':[('all','جميع المخاطر'),*FOLLOW_TABS],'tab':tab,'can_bulk':can_manage(request.user),'error':error,**choices(request.user)})
 def decisions_for(user):
     qs=Decision.objects.select_related('meeting','followup_owner','approved_minutes_attachment').prefetch_related('tasks')
     if user.role==Role.ADMIN: return qs.none()
-    if user.role in GLOBAL_ROLES: return qs
+    if user.role in DECISION_READ_ROLES: return qs
     return qs.filter(Q(tasks__in=tasks_for(user))|Q(followup_owner=user)).distinct()
 def decision_metrics(user,decision):
     tasks=tasks_for(user).filter(decision=decision); total=tasks.count()
-    return {'progress':round(tasks.aggregate(p=Avg('progress'))['p'] or 0),'approved_progress':round(tasks.filter(status=Status.CLOSED).count()/total*100) if total else 0,'total':total,'full_scope':user.role in GLOBAL_ROLES}
+    return {'progress':round(tasks.aggregate(p=Avg('progress'))['p'] or 0),'approved_progress':round(tasks.filter(status=Status.CLOSED).count()/total*100) if total else 0,'total':total,'full_scope':user.role in DECISION_READ_ROLES}
 def decision_activities(user,decision):
     qs=decision.activities.select_related('actor')
     # Calculated whole-decision percentages can reveal hidden task performance.
-    if user.role not in GLOBAL_ROLES: qs=qs.filter(Q(new__derived__isnull=True)|Q(new__derived=False))
+    if user.role not in DECISION_READ_ROLES: qs=qs.filter(Q(new__derived__isnull=True)|Q(new__derived=False))
     return qs
 @login_required
 def decisions(request):
@@ -186,7 +205,7 @@ def decisions(request):
         metrics=decision_metrics(request.user,decision)
         decision.visible_progress=metrics['progress']; decision.visible_approved_progress=metrics['approved_progress']
         rows.append(decision)
-    return render(request,'core/decisions.html',{'decisions':rows,'manage':request.user.role in GLOBAL_ROLES,'full_scope':request.user.role in GLOBAL_ROLES,'meetings':Meeting.objects.all() if request.user.role in GLOBAL_ROLES else Meeting.objects.filter(decisions__in=decisions_for(request.user)).distinct()})
+    return render(request,'core/decisions.html',{'decisions':rows,'manage':request.user.role in GLOBAL_ROLES,'full_scope':request.user.role in DECISION_READ_ROLES,'meetings':Meeting.objects.all() if request.user.role in GLOBAL_ROLES else Meeting.objects.filter(decisions__in=decisions_for(request.user)).distinct()})
 @login_required
 def decision_detail(request,pk):
     require_operational(request.user)
@@ -226,6 +245,7 @@ def generic_form(request,kind,pk=None):
     return render(request,'core/form.html',{'form':form,'title':('تعديل ' if pk else 'إضافة ')+label})
 @login_required
 def directory(request):
+    if request.user.role==Role.BOARD: raise PermissionDenied()
     qs=tasks_for(request.user)
     units=Unit.objects.all() if request.user.role in DIRECTORY_ROLES else request.user.units.all()
     users=User.objects.all() if request.user.role in DIRECTORY_ROLES else User.objects.filter(units__in=units).distinct() if request.user.role==Role.HEAD else User.objects.filter(pk=request.user.pk)
@@ -268,7 +288,8 @@ def report_rows(qs,kind,user):
 @login_required
 def reports(request):
     require_operational(request.user)
-    qs=filter_tasks(request,tasks_for(request.user)); kind=request.GET.get('report','units')
+    qs=filter_tasks(request,tasks_for(request.user)); kind=request.GET.get('report','execution' if request.user.role==Role.BOARD else 'units')
+    if request.user.role==Role.BOARD and kind not in ['decisions','execution']: raise PermissionDenied('دور المجلس يقرأ تقارير القرارات وتنفيذها فقط.')
     if kind not in dict(REPORTS): kind='units'
     header,rows=report_rows(qs,kind,request.user)
     export=request.GET.get('export')
@@ -286,12 +307,12 @@ def reports(request):
         sheet.freeze_panes='A2'; sheet.auto_filter.ref=sheet.dimensions
         buffer=io.BytesIO(); book.save(buffer)
         response=HttpResponse(buffer.getvalue(),content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'); response['Content-Disposition']='attachment; filename="report.xlsx"'; return response
-    return render(request,'core/reports.html',{'header':header,'rows':rows,'kpi':kpis(qs),'report_types':REPORTS,'report':kind,**choices(request.user)})
+    return render(request,'core/reports.html',{'header':header,'rows':rows,'kpi':kpis(qs),'report_types':[item for item in REPORTS if item[0] in ['decisions','execution']] if request.user.role==Role.BOARD else REPORTS,'report':kind,**choices(request.user)})
 def safe_cell(value):
     return "'"+value if isinstance(value,str) and value.startswith(('=','+','-','@')) else value
 @login_required
 def notifications(request):
-    require_operational(request.user)
+    require_execution_space(request.user)
     if request.method=='POST':
         if request.POST.get('id'): request.user.notifications.filter(pk=request.POST['id']).update(read=True)
         else: request.user.notifications.filter(read=False).update(read=True)
@@ -334,5 +355,5 @@ def catalogs(request):
 @login_required
 def permissions(request):
     if request.user.role!=Role.ADMIN: raise PermissionDenied()
-    rows=[['مسؤول النظام','المستخدمون والوحدات والإعدادات','لا','لا','إدارة المستخدمين والوحدات والإعدادات فقط'],['المدير التنفيذي / المساعد','جميع الوحدات','نعم','نعم؛ دون الاعتماد الذاتي','الاجتماعات والقرارات'],['رئيس الوحدة','مهام وحدته والمشارك بها','داخل الوحدة القائدة','داخل الوحدة القائدة','متابعة موظفي الوحدة'],['الموظف','مهامه كمسؤول أو مشارك','لا','لا','تحديث التنفيذ والردود'],['العرض فقط','المهام العادية لوحدته','لا','لا','قراءة وتقارير فقط']]
+    rows=[['مجلس الإدارة / أمين المجلس','القرارات والمهام المرتبطة وتقارير تنفيذها','لا','لا','قراءة النسب الكلية وسجل تدقيق القرارات'],['مسؤول النظام','المستخدمون والوحدات والإعدادات','لا','لا','إدارة المستخدمين والوحدات والإعدادات فقط'],['المدير التنفيذي / المساعد','جميع الوحدات','نعم','نعم؛ دون الاعتماد الذاتي','الاجتماعات والقرارات'],['رئيس الوحدة','مهام وحدته والمشارك بها','داخل الوحدة القائدة','داخل الوحدة القائدة','متابعة موظفي الوحدة'],['الموظف','مهامه كمسؤول أو مشارك','لا','لا','تحديث التنفيذ والردود'],['العرض فقط','المهام العادية لوحدته','لا','لا','قراءة وتقارير فقط']]
     return render(request,'core/permissions.html',{'rows':rows})

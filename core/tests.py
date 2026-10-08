@@ -43,7 +43,7 @@ class AcceptanceTests(TestCase):
         return {k:(str(v) if hasattr(v,'isoformat') else v.pk if hasattr(v,'pk') else v) for k,v in d.items()}|{'participants':[self.participant.pk]}
     def progress(self,task,p): return update_progress(self.owner,task,p,'تحديث التنفيذ','تم تجهيز المحتوى','لا يوجد' if p==100 else 'بقية المحتوى')
     def obstacle(self,task):
-        return report_obstacle(self.owner,task,{'kind':'نقص موارد','description':'ميزانية المورد غير معتمدة','caused_by':'المورد','needs_decision':True,'requested_action':'اعتماد الميزانية','intervention_owner':self.head,'expected_resolution':self.today+timedelta(days=1),'impact':'high'})
+        return report_obstacle(self.owner,task,{'kind':'نقص موارد','description':'ميزانية المورد غير معتمدة','reason':'الموارد غير معتمدة','caused_by':'المورد','needs_decision':True,'requested_action':'اعتماد الميزانية','intervention_owner':self.head,'expected_resolution':self.today+timedelta(days=1),'impact':'high'})
     def test_complete_required_journey_over_api(self):
         response=self.api.post('/api/tasks/',self.payload(),format='json'); self.assertEqual(response.status_code,201,response.data)
         pk=response.data['id']; task=Task.objects.get(pk=pk)
@@ -55,7 +55,7 @@ class AcceptanceTests(TestCase):
         self.assertEqual(self.api.post(f'/api/tasks/{pk}/progress/',update,format='json').status_code,200)
         upload=SimpleUploadedFile('evidence.pdf',b'%PDF-1.4\nTest evidence',content_type='application/pdf')
         file_response=self.api.post(f'/api/tasks/{pk}/attachments/',{'file':upload},format='multipart'); self.assertEqual(file_response.status_code,201,file_response.data)
-        obstacle_data={'kind':'اعتماد مالي','description':'بانتظار الاعتماد','caused_by':'المورد','needs_decision':True,'requested_action':'اعتماد الميزانية','intervention_owner':self.head.pk,'expected_resolution':str(self.today),'impact':'high'}
+        obstacle_data={'kind':'اعتماد مالي','description':'بانتظار الاعتماد','reason':'لم يصدر الاعتماد المالي','caused_by':'المورد','needs_decision':True,'requested_action':'اعتماد الميزانية','intervention_owner':self.head.pk,'expected_resolution':str(self.today),'impact':'high'}
         blocked=self.api.post(f'/api/tasks/{pk}/obstacles/',obstacle_data,format='json'); self.assertEqual(blocked.status_code,201,blocked.data)
         self.assertTrue(Notification.objects.filter(task=task,recipient=self.head,text__contains='تعثر').exists())
         self.api.force_authenticate(self.head)
@@ -249,11 +249,11 @@ class AcceptanceTests(TestCase):
         t=self.task(start_date=self.today-timedelta(days=5),due_date=self.today-timedelta(days=2))
         self.client.force_login(self.head)
         for state in TERMINAL:
-            Task.objects.filter(pk=t.pk).update(status=state)
+            Task.objects.filter(pk=t.pk).update(status=state,progress=100 if state==Status.CLOSED else 0)
             for url in ['/tasks/',f'/tasks/{t.pk}/']:
                 response=self.client.get(url); self.assertNotContains(response,'data-deadline')
                 self.assertNotContains(response,'متأخرة 2 يوم')
-        Task.objects.filter(pk=t.pk).update(status=Status.ACTIVE,due_date=self.today)
+        Task.objects.filter(pk=t.pk).update(status=Status.ACTIVE,progress=0,due_date=self.today)
         self.assertContains(self.client.get('/tasks/'),'تستحق اليوم')
         self.assertNotContains(self.client.get('/tasks/'),'متبقي 0 يوم')
 
@@ -418,3 +418,97 @@ class AcceptanceTests(TestCase):
         self.assertEqual(response.data['metric_scope'],'all')
         self.api.force_authenticate(self.owner); payload.update(number='UNAUTHORIZED')
         self.assertEqual(self.api.post('/api/decisions/',payload,format='json').status_code,403)
+
+    def board_user(self):
+        return User.objects.create_user(username='board',email='board@example.invalid',employee_number='BOARD',role=Role.BOARD)
+    def test_board_can_read_decisions_and_execution_reports_only(self):
+        board=self.board_user(); d=save_decision(self.executive,self.decision_data())
+        linked=self.task(decision=d,confidentiality='secret'); independent=self.task()
+        self.progress(linked,100); linked.refresh_from_db(); change_status(self.head,linked,Status.CLOSED,'اعتماد')
+        self.api.force_authenticate(board)
+        self.assertEqual(self.api.get(f'/api/decisions/{d.pk}/').data['approved_progress'],100)
+        self.assertEqual(self.api.get(f'/api/decisions/{d.pk}/').data['metric_scope'],'all')
+        self.assertEqual(self.api.get(f'/api/tasks/{independent.pk}/').status_code,404)
+        for action,payload in [('progress',{'progress':20,'comment':'تغيير','accomplished':'عمل','remaining':'باقي'}),('transition',{'status':'returned','comment':'إعادة'}),('comments',{'body':'تعديل'})]:
+            self.assertEqual(self.api.post(f'/api/tasks/{linked.pk}/{action}/',payload,format='json').status_code,403)
+        self.assertEqual(self.api.patch(f'/api/decisions/{d.pk}/',{'status':'cancelled','reason':'تعديل'},format='json').status_code,403)
+        self.client.force_login(board)
+        for url in ['/decisions/',f'/decisions/{d.pk}/','/reports/?report=execution','/reports/?report=decisions&export=xlsx',f'/tasks/{linked.pk}/']:
+            self.assertEqual(self.client.get(url).status_code,200,url)
+        for url in ['/tasks/','/followup/','/directory/','/settings/','/reports/?report=employees','/tasks/new/']:
+            self.assertEqual(self.client.get(url).status_code,403,url)
+        page=self.client.get('/decisions/'); self.assertNotContains(page,'href="/tasks/new/"'); self.assertNotContains(page,'href="/followup/"')
+        self.assertFalse(can_work(board,linked)); self.assertFalse(can_manage(board,linked))
+
+    def test_followup_groups_differ_from_task_list_and_overlap(self):
+        t=self.task(start_date=self.today-timedelta(days=10),due_date=self.today-timedelta(days=1)); self.obstacle(t)
+        Task.objects.filter(pk=t.pk).update(updated_at=timezone.now()-timedelta(days=7)); escalate(self.owner,t,'طلب تدخل')
+        self.client.force_login(self.head); page=self.client.get('/followup/')
+        self.assertTemplateUsed(page,'core/followup.html')
+        self.assertEqual([g['key'] for g in page.context['groups']],['overdue','blocked','stale','escalated'])
+        self.assertTrue(all(g['count']==1 for g in page.context['groups']))
+        self.assertContains(page,'مجموعات المخاطر وأولويات التدخل'); self.assertContains(page,'إجراء جماعي')
+        self.assertTemplateUsed(self.client.get('/tasks/'),'core/tasks.html')
+        self.client.force_login(self.owner); self.assertNotContains(self.client.get('/followup/'),'id="bulk-followup"')
+
+    def test_bulk_reminders_are_unique_audited_and_do_not_change_progress(self):
+        first=self.task(); second=self.task(); self.api.force_authenticate(self.head)
+        payload={'task_ids':[first.pk,second.pk,first.pk],'action':'remind','reason':'تحديث موقف التنفيذ'}
+        before=Notification.objects.count(); response=self.api.post('/api/followup/bulk/',payload,format='json')
+        self.assertEqual(response.status_code,200,response.data); self.assertEqual(response.data['processed'],2)
+        self.assertGreater(Notification.objects.count(),before)
+        count=Notification.objects.count(); repeated=self.api.post('/api/followup/bulk/',payload,format='json')
+        self.assertEqual(repeated.data,{'processed':0,'skipped':2}); self.assertEqual(Notification.objects.count(),count)
+        first.refresh_from_db(); self.assertEqual(first.progress,0); self.assertEqual(first.status,Status.ASSIGNED)
+        self.assertEqual(first.activities.filter(action='تذكير جماعي',new__reason='تحديث موقف التنفيذ').count(),1)
+        payload.update(action='escalate',reason='تدخل الإدارة مطلوب')
+        self.assertEqual(self.api.post('/api/followup/bulk/',payload,format='json').data['processed'],2)
+        self.assertTrue(Escalation.objects.filter(task=second,recipient=self.executive).exists())
+
+    def test_bulk_scope_and_required_reason_are_atomic(self):
+        own=self.task(); outside=create_task(self.executive,self.data(unit=self.other_unit,owner=self.outsider))
+        self.api.force_authenticate(self.head); before=Notification.objects.count()
+        response=self.api.post('/api/followup/bulk/',{'task_ids':[own.pk,outside.pk],'action':'remind','reason':'متابعة'},format='json')
+        self.assertEqual(response.status_code,403); self.assertEqual(Notification.objects.count(),before)
+        for user in [self.owner,self.viewer,self.admin,self.board_user()]:
+            self.api.force_authenticate(user)
+            self.assertEqual(self.api.post('/api/followup/bulk/',{'task_ids':[own.pk],'action':'escalate','reason':'متابعة'},format='json').status_code,403)
+        self.api.force_authenticate(self.head)
+        self.assertEqual(self.api.post('/api/followup/bulk/',{'task_ids':[own.pk],'action':'remind','reason':' '},format='json').status_code,400)
+        self.client.force_login(self.head)
+        self.assertEqual(self.client.post('/followup/',{'task_ids':[own.pk],'action':'remind','reason':'تذكير HTML'}).status_code,302)
+
+    def test_reasons_required_for_obstacle_extension_and_return(self):
+        t=self.task()
+        data={'kind':'نقص موارد','description':'وصف المشكلة','reason':' ','caused_by':'المورد','needs_decision':False,'requested_action':'تدخل','intervention_owner':self.head,'expected_resolution':self.today,'impact':'high'}
+        with self.assertRaises(ValidationError): report_obstacle(self.owner,t,data)
+        self.assertEqual(t.obstacles.count(),0)
+        data['reason']='تأخر صرف الموارد'; report_obstacle(self.owner,t,data)
+        self.assertEqual(t.activities.filter(action='تسجيل عائق').first().reason,'تأخر صرف الموارد')
+        with self.assertRaises(ValidationError): edit_task(self.head,t,{'due_date':t.due_date+timedelta(days=2)},[],[],' ')
+        t.refresh_from_db(); resolve_obstacle(self.head,t.obstacles.first(),'توفير الموارد'); self.progress(t,100); t.refresh_from_db()
+        with self.assertRaises(ValidationError): change_status(self.head,t,Status.RETURNED,' ')
+        t.refresh_from_db(); self.assertEqual(t.status,Status.APPROVAL)
+
+    def test_status_progress_consistency_enforced_in_model_services_and_database(self):
+        t=self.task()
+        with self.assertRaises(ValidationError): change_status(self.owner,t,Status.APPROVAL,'غير متسق')
+        for status,progress in [(Status.ACTIVE,100),(Status.APPROVAL,50),(Status.CLOSED,20),(Status.COMPLETED,99)]:
+            t.status=status; t.progress=progress
+            with self.assertRaises(ValidationError): t.validate_status_progress()
+            with self.assertRaises(DatabaseError),transaction.atomic(): Task.objects.filter(pk=t.pk).update(status=status,progress=progress)
+        t.refresh_from_db(); self.progress(t,100); t.refresh_from_db()
+        self.assertEqual((t.status,t.progress),(Status.APPROVAL,100))
+        change_status(self.head,t,Status.RETURNED,'نقص شواهد'); t.refresh_from_db()
+        self.assertEqual((t.status,t.progress),(Status.RETURNED,99))
+
+    def test_board_cannot_bypass_role_via_django_admin_permissions(self):
+        from django.contrib import admin
+        from django.contrib.auth.models import Permission
+        from django.test import RequestFactory
+        board=self.board_user(); board.is_staff=True; board.save()
+        board.user_permissions.add(Permission.objects.get(content_type__app_label='core',codename='change_user'))
+        self.assertTrue(board.has_perm('core.change_user'))
+        request=RequestFactory().get('/admin/core/user/'); request.user=board
+        self.assertFalse(admin.site._registry[User].has_change_permission(request,self.owner))
+        self.assertFalse(admin.site._registry[Task].has_view_permission(request))
