@@ -287,5 +287,13 @@
   "منصة إحسان لإدارة المهام ومتابعة القرارات": "Ehsan tasks and decisions platform",
   "نتائج ضمن نطاقك، والتأخر مؤشر مستقل عن الحالة.": "Results follow your access scope. Overdue is a separate indicator.",
   "نسخة قابلة للطباعة؛ حفظ PDF من المتصفح لا يثبت توافق PDF/A أو توقيع PAdES.": "Printable copy. Browser PDF output does not establish PDF/A or PAdES compliance.",
-  "يسجل الاطلاع والإحالة والتعديل والاعتماد والتنزيل. لا يقبل التعديل أو الحذف. آخر 100 حدث في الواجهة.": "Records views, referrals, edits, approvals and downloads. Immutable. Latest 100 events shown."
+  "يسجل الاطلاع والإحالة والتعديل والاعتماد والتنزيل. لا يقبل التعديل أو الحذف. آخر 100 حدث في الواجهة.": "Records views, referrals, edits, approvals and downloads. Immutable. Latest 100 events shown.",
+  "متابعة مهام البريد الوارد": "Incoming mail task tracking",
+  "تحويل الوارد إلى مهمة": "Convert incoming mail to a task",
+  "فتح المهمة وتحديث التنفيذ": "Open task and update progress",
+  "إنشاء المهمة المرتبطة": "Create linked task",
+  "الموظف المسؤول عن المهمة": "Task owner",
+  "تاريخ استحقاق المهمة": "Task due date",
+  "التكليف المطلوب / سبب التحويل": "Required work / conversion reason",
+  "اختر المسؤول والاستحقاق. يُحفظ ارتباط المهمة بالبريد، ويُعاد استخدام مهمة الإحالة المفتوحة إذا كانت موجودة.": "Choose the owner and due date. The task remains linked to the mail; an existing open referral task is reused."
 }

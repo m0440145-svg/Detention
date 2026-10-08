@@ -198,3 +198,33 @@ class CorrespondenceAcceptanceTests(TestCase):
         result=self.client.post('/communications/register/',data)
         self.assertEqual(result.status_code,302,result.content[:1000])
         self.assertTrue(Correspondence.objects.filter(external_number='FORM-1',reference__startswith='IN-').exists())
+    def test_direct_incoming_task_conversion_is_atomic_and_idempotent(self):
+        m=self.mail();due=timezone.localdate()+timedelta(days=3)
+        url=f'/api/communications/{m.pk}/convert-to-task/'
+        data={'owner':self.people[Role.EMPLOYEE].pk,'due_date':str(due),'reason':'تجهيز الرد والمرفقات'}
+        first=self.api.post(url,data);self.assertEqual(first.status_code,201,first.data)
+        second=self.api.post(url,data);self.assertEqual(second.data['task'],first.data['task'])
+        self.assertEqual(m.referrals.count(),1)
+        row=m.referrals.get();self.assertEqual(row.task.source,'inbound')
+        self.assertTrue(m.events.filter(action='تحويل إحالة إلى مهمة',reason=data['reason']).exists())
+        task_services.update_progress(self.people[Role.EMPLOYEE],row.task,50,'تقدم التنفيذ','مسودة الرد','لا يوجد')
+        tracked=self.api.get(f'/api/communications/{m.pk}/referrals/').data[0]
+        self.assertEqual(tracked['task_tracking']['progress'],50)
+        self.client.force_login(self.people[Role.EXECUTIVE])
+        html=self.client.get(f'/communications/{m.pk}/');self.assertContains(html,'متابعة مهام البريد الوارد');self.assertContains(html,'50%')
+    def test_direct_conversion_rolls_back_invalid_due_and_denies_unauthorized(self):
+        m=self.mail();due=timezone.localdate()-timedelta(days=1)
+        with self.assertRaises(ValidationError):services.incoming_to_task(self.people[Role.EXECUTIVE],m,self.people[Role.EMPLOYEE],due,'تكليف')
+        self.assertEqual(m.referrals.count(),0);m.refresh_from_db();self.assertEqual(m.status,MailStatus.REGISTERED)
+        for role in [Role.ADMIN,Role.BOARD,Role.VIEWER,Role.EMPLOYEE]:
+            with self.assertRaises(PermissionDenied):services.incoming_to_task(self.people[role],m,self.people[Role.EMPLOYEE],timezone.localdate(),'تكليف')
+        secret=self.mail(external_number='SEC-DIRECT',secrecy=Secrecy.SECRET)
+        with self.assertRaises(PermissionDenied):services.incoming_to_task(self.people[Role.EXECUTIVE],secret,self.outsider,timezone.localdate(),'تكليف')
+        self.assertEqual(secret.referrals.count(),0)
+    def test_direct_conversion_html_and_closed_mail(self):
+        m=self.mail();self.client.force_login(self.people[Role.EXECUTIVE])
+        response=self.client.post(f'/communications/{m.pk}/',{'form_type':'incoming-task','owner':self.people[Role.EMPLOYEE].pk,'due_date':str(timezone.localdate()),'reason':'تنفيذ طلب الجهة'})
+        self.assertEqual(response.status_code,302);self.assertIsNotNone(m.referrals.get().task_id)
+        m=services.transition(self.people[Role.EXECUTIVE],m,'cancel','إلغاء الطلب')
+        self.assertNotContains(self.client.get(f'/communications/{m.pk}/'),'id="incoming-task"')
+        with self.assertRaises(ValidationError):services.incoming_to_task(self.people[Role.EXECUTIVE],m,self.people[Role.EMPLOYEE],timezone.localdate(),'تكليف')

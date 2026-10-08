@@ -3,6 +3,7 @@ from django.core.exceptions import PermissionDenied
 from rest_framework import serializers,viewsets
 from rest_framework.decorators import action,api_view
 from rest_framework.response import Response
+from core.models import User
 from .models import *
 from . import services
 
@@ -81,7 +82,10 @@ class MailViewSet(viewsets.ModelViewSet):
             from core.policy import tasks_for
             for row in mail.referrals.all():
                 data=ReferralSerializer(row).data
-                if row.task_id and not tasks_for(request.user).filter(pk=row.task_id).exists(): data['task']=None
+                if row.task_id and tasks_for(request.user).filter(pk=row.task_id).exists():
+                    data['task_tracking']={'url':f'/tasks/{row.task_id}/','status':row.task.status,'status_label':row.task.get_status_display(),'progress':row.task.progress,'due_date':str(row.task.due_date),'deadline_label':row.task.deadline_label,'is_overdue':row.task.is_overdue}
+                else:
+                    data['task']=None
                 rows.append(data)
             return Response(rows)
         s=ReferralSerializer(data=request.data);s.is_valid(raise_exception=True)
@@ -94,9 +98,16 @@ class MailViewSet(viewsets.ModelViewSet):
         return Response(ReferralSerializer(row).data)
     @action(detail=True,methods=['post'],url_path='convert-to-task')
     def convert_to_task(self,request,pk=None):
-        row=get_object_or_404(self.get_object().referrals,pk=request.data.get('referral'))
-        s=serializers.DateField();due=s.run_validation(request.data.get('due_date'))
-        task=services.convert_to_task(request.user,row,{'due_date':due},request.META.get('REMOTE_ADDR',''))
+        mail=self.get_object()
+        due=serializers.DateField().run_validation(request.data.get('due_date'))
+        if request.data.get('referral'):
+            row=get_object_or_404(mail.referrals,pk=request.data.get('referral'))
+            task=services.convert_to_task(request.user,row,{'due_date':due},request.META.get('REMOTE_ADDR',''))
+        else:
+            owner_id=serializers.IntegerField(min_value=1).run_validation(request.data.get('owner'))
+            owner=get_object_or_404(User,pk=owner_id)
+            reason=serializers.CharField().run_validation(request.data.get('reason'))
+            task=services.incoming_to_task(request.user,mail,owner,due,reason,request.META.get('REMOTE_ADDR',''))
         return Response({'task':task.pk,'url':f'/tasks/{task.pk}/'},status=201)
     @action(detail=True,methods=['post'],url_path='extend-due')
     def extend_due(self,request,pk=None):

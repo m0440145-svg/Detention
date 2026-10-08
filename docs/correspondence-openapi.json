@@ -474,7 +474,7 @@
     },
     "/api/communications/{id}/convert-to-task/": {
       "post": {
-        "summary": "convert-to-task",
+        "summary": "تحويل البريد الوارد إلى مهمة مرتبطة أو تحويل إحالة موجودة",
         "responses": {
           "200": {
             "description": "Success"
@@ -513,20 +513,46 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "required": [
-                  "referral",
-                  "due_date"
-                ],
-                "properties": {
-                  "referral": {
-                    "type": "integer"
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "owner",
+                      "due_date",
+                      "reason"
+                    ],
+                    "properties": {
+                      "owner": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "due_date": {
+                        "type": "string",
+                        "format": "date"
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
                   },
-                  "due_date": {
-                    "type": "string",
-                    "format": "date"
+                  {
+                    "type": "object",
+                    "required": [
+                      "referral",
+                      "due_date"
+                    ],
+                    "properties": {
+                      "referral": {
+                        "type": "integer"
+                      },
+                      "due_date": {
+                        "type": "string",
+                        "format": "date"
+                      }
+                    }
                   }
-                }
+                ]
               }
             }
           }

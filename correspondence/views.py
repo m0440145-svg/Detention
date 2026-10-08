@@ -111,6 +111,12 @@ def detail(request,pk):
                 request_extraction(request.user,attachment,ip(request))
             elif form_type=='complete':
                 row=get_object_or_404(mail.referrals,pk=request.POST.get('referral')); services.complete_referral(request.user,row,request.POST.get('reason',''),ip(request))
+            elif form_type=='incoming-task':
+                form=IncomingTaskForm(request.POST,mail=mail,user=request.user)
+                if not form.is_valid(): raise ValidationError(str(form.errors))
+                task=services.incoming_to_task(request.user,mail,**form.cleaned_data,ip=ip(request))
+                messages.success(request,'تم ربط البريد الوارد بالمهمة '+task.code+'؛ يمكنك متابعة التنفيذ من صفحة البريد أو المهمة.')
+                return redirect('mail-detail',pk=mail.pk)
             elif form_type=='task':
                 from datetime import date
                 row=get_object_or_404(mail.referrals,pk=request.POST.get('referral'))
@@ -130,7 +136,7 @@ def detail(request,pk):
     related_visible=bool(mail.related_id and services.visible(request.user).filter(pk=mail.related_id).exists())
     referrals=list(mail.referrals.select_related('recipient','created_by','task'))
     for row in referrals: row.task_visible=bool(row.task_id and tasks_for(request.user).filter(pk=row.task_id).exists())
-    return render(request,'correspondence/detail.html',{'decision_visible':decision_visible,'related_visible':related_visible,'mail':mail,'body':__import__('correspondence.documents',fromlist=['clean_richtext']).clean_richtext(services.rendered_body(mail)) if mail.rich_text else services.rendered_body(mail),'error':error,'action_form':ActionForm(),'referral_form':ReferralForm(mail=mail),'extend_form':ExtendForm(),'referrals':referrals,'events':mail.events.select_related('actor').order_by('-pk')[:100],'chain_valid':services.verify_chain(mail),'can_manage':services.can_manage(request.user,mail),'can_write':request.user.role not in [Role.ADMIN,Role.VIEWER,Role.BOARD],'can_download':__import__('correspondence.governance',fromlist=['can_export']).can_export(request.user,mail,'download'),'can_edit':mail.status in [MailStatus.DRAFT,MailStatus.REGISTERED,MailStatus.RETURNED]})
+    return render(request,'correspondence/detail.html',{'decision_visible':decision_visible,'related_visible':related_visible,'mail':mail,'body':__import__('correspondence.documents',fromlist=['clean_richtext']).clean_richtext(services.rendered_body(mail)) if mail.rich_text else services.rendered_body(mail),'error':error,'incoming_task_form':IncomingTaskForm(mail=mail,user=request.user,initial={'owner':mail.owner_id,'due_date':timezone.localtime(mail.due_at).date()}),'can_convert_incoming':mail.kind==Kind.IN and mail.status in [MailStatus.REGISTERED,MailStatus.REFERRED,MailStatus.ACTIVE,MailStatus.RETURNED] and services.can_manage(request.user,mail) and __import__('core.policy',fromlist=['can_manage']).can_manage(request.user),'action_form':ActionForm(),'referral_form':ReferralForm(mail=mail),'extend_form':ExtendForm(),'referrals':referrals,'events':mail.events.select_related('actor').order_by('-pk')[:100],'chain_valid':services.verify_chain(mail),'can_manage':services.can_manage(request.user,mail),'can_write':request.user.role not in [Role.ADMIN,Role.VIEWER,Role.BOARD],'can_download':__import__('correspondence.governance',fromlist=['can_export']).can_export(request.user,mail,'download'),'can_edit':mail.status in [MailStatus.DRAFT,MailStatus.REGISTERED,MailStatus.RETURNED]})
 
 @login_required
 def download(request,pk):

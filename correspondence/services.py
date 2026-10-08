@@ -245,6 +245,24 @@ def complete_referral(user,referral,reason,ip=''):
 
 
 @transaction.atomic
+def incoming_to_task(user,mail,owner,due_date,reason,ip=''):
+    mail=Correspondence.objects.select_for_update().get(pk=mail.pk)
+    require_manage(user,mail)
+    from core.policy import require_manage as require_task_management
+    require_task_management(user)
+    reason=reason_required(reason)
+    if mail.kind!=Kind.IN or mail.status not in [MailStatus.REGISTERED,MailStatus.REFERRED,MailStatus.ACTIVE,MailStatus.RETURNED]:
+        raise ValidationError('التحويل متاح للبريد الوارد المفتوح خلال المعالجة.')
+    if not owner.is_active or owner.role in [Role.ADMIN,Role.VIEWER,Role.BOARD]:
+        raise ValidationError('اختر مسؤول تنفيذ نشطًا.')
+    row=mail.referrals.filter(recipient=owner,completed_at__isnull=True).first()
+    if not row:
+        row=refer(user,mail,[owner],'execute',reason,ip)[0]
+    task=convert_to_task(user,row,{'due_date':due_date},ip)
+    return task
+
+
+@transaction.atomic
 def convert_to_task(user,referral,data,ip=''):
     mail=Correspondence.objects.select_for_update().get(pk=referral.mail_id); require_manage(user,mail)
     referral=Referral.objects.select_for_update().get(pk=referral.pk)
@@ -257,9 +275,9 @@ def convert_to_task(user,referral,data,ip=''):
     due=data.get('due_date') or timezone.localtime(mail.due_at).date()
     if due<timezone.localdate(): raise ValidationError('حدد موعدًا جديدًا صالحًا للمهمة المتأخرة.')
     restricted=mail.secrecy in [Secrecy.RESTRICTED,Secrecy.SECRET]
-    task=task_services.create_task(user,{'title':('معالجة إحالة مراسلة محمية' if restricted else mail.subject),'description':('المحتوى متاح للمصرح لهم فقط في وحدة الاتصالات الإدارية.' if restricted else f'مراسلة {mail.code}\n'+mail.body),'unit':unit,'owner':owner,'start_date':timezone.localdate(),'due_date':due,'priority':mail.priority,'confidentiality':'secret' if mail.secrecy==Secrecy.SECRET else 'restricted' if mail.secrecy==Secrecy.RESTRICTED else 'normal','source':Source.INBOUND if mail.kind==Kind.IN else Source.OUTBOUND,'expected_result':'معالجة الإحالة وتوثيق الرد','success_indicator':'اعتماد المخرج وإغلاق المهمة'},[])
+    task=task_services.create_task(user,{'title':('معالجة إحالة مراسلة محمية' if restricted else mail.subject),'description':('المحتوى متاح للمصرح لهم فقط في وحدة الاتصالات الإدارية.' if restricted else f'مراسلة {mail.code}\n'+mail.body),'unit':unit,'owner':owner,'start_date':timezone.localdate(),'due_date':due,'priority':mail.priority,'confidentiality':'secret' if mail.secrecy==Secrecy.SECRET else 'restricted' if mail.secrecy==Secrecy.RESTRICTED else 'normal','source':Source.INBOUND if mail.kind==Kind.IN else Source.OUTBOUND,'expected_result':(referral.note if referral.note and not restricted else 'معالجة الإحالة وتوثيق الرد'),'success_indicator':'اعتماد المخرج وإغلاق المهمة'},[])
     referral.task=task; referral.save(update_fields=['task'])
-    event(mail,user,'تحويل إحالة إلى مهمة','إنشاء تكليف مرتبط',new={'referral':referral.pk,'task':task.pk,'due_date':str(due)},ip=ip)
+    event(mail,user,'تحويل إحالة إلى مهمة',referral.note or 'إنشاء تكليف مرتبط',new={'referral':referral.pk,'task':task.pk,'due_date':str(due)},ip=ip)
     return task
 
 

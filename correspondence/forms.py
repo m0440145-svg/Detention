@@ -51,6 +51,17 @@ class ReferralForm(forms.Form):
         if mail.secrecy in [Secrecy.RESTRICTED,Secrecy.SECRET]: users=users.filter(pk__in=[p.pk for p in users if visible(p).filter(pk=mail.pk).exists()])
         self.fields['recipients'].queryset=users
 
+class IncomingTaskForm(forms.Form):
+    owner=forms.ModelChoiceField(label='الموظف المسؤول عن المهمة',queryset=User.objects.none())
+    due_date=forms.DateField(label='تاريخ استحقاق المهمة',widget=forms.DateInput(attrs={'type':'date'}))
+    reason=forms.CharField(label='التكليف المطلوب / سبب التحويل',widget=forms.Textarea(attrs={'rows':2}))
+    def __init__(self,*args,mail,user,**kwargs):
+        super().__init__(*args,**kwargs)
+        users=ReferralForm(mail=mail).fields['recipients'].queryset.filter(units__active=True)
+        if user.role==Role.HEAD: users=users.filter(units__head=user)
+        self.fields['owner'].queryset=users.distinct()
+        localize(self,user)
+
 class ActionForm(forms.Form):
     action=forms.ChoiceField(label='الإجراء',choices=[('submit-incoming-approval','إرسال الوارد للاعتماد'),('suspend','تعليق بمبرر'),('unsuspend','استئناف معالجة المعلق'),('done-override','إغلاق الوارد باستثناء تنفيذي'),('submit','تقديم للتدقيق'),('review','إنهاء التدقيق'),('approve','اعتماد المستوى الحالي'),('reject','إعادة للتصحيح'),('sign','إثبات توقيع داخلي وإصدار الرقم'),('send','إثبات إرسال يدوي'),('receive','إثبات استلام'),('start','بدء المعالجة'),('pause','انتظار جهة خارجية وإيقاف SLA'),('resume','استئناف SLA'),('done','إنجاز الوارد'),('archive','أرشفة'),('cancel','إلغاء بمبرر')])
     reason=forms.CharField(label='سبب الإجراء',widget=forms.Textarea(attrs={'rows':2}))
