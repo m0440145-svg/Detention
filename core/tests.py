@@ -512,3 +512,28 @@ class AcceptanceTests(TestCase):
         request=RequestFactory().get('/admin/core/user/'); request.user=board
         self.assertFalse(admin.site._registry[User].has_change_permission(request,self.owner))
         self.assertFalse(admin.site._registry[Task].has_view_permission(request))
+
+    def test_arabic_locale_uses_ascii_numbers_and_decimal_dot(self):
+        from decimal import Decimal
+        from django.template import Template,Context
+        from django.utils import translation
+        with translation.override('ar'):
+            rendered=Template('{{ n }}|{{ n|floatformat:1 }}|{{ count }}').render(Context({'n':Decimal('14.0'),'count':1234}))
+        self.assertEqual(rendered,'14.0|14.0|1234')
+
+    @override_settings(PASSWORD_HASHERS=['django.contrib.auth.hashers.MD5PasswordHasher'])
+    def test_demo_assignments_and_waiting_supplier_are_consistent(self):
+        from django.core.management import call_command
+        with patch.dict('os.environ',{'DEMO_PASSWORD':'Test-Demo-Only-Password!'}):
+            call_command('seed_demo',stdout=io.StringIO())
+        food=Task.objects.get(title='إعداد خطة السلال الغذائية — تجريبي')
+        hr=Task.objects.get(title='تحديث سياسات الموارد البشرية — تجريبي')
+        water=Task.objects.get(title='متابعة مبادرة سقيا الماء — تجريبي')
+        self.assertEqual(food.unit.name,'وحدة الخدمات الرعوية')
+        self.assertEqual(hr.unit.name,'وحدة الخدمات المساندة')
+        self.assertEqual(water.unit.name,'وحدة الخدمات الرعوية')
+        self.assertEqual((water.status,water.progress),(Status.WAITING,25))
+        self.assertTrue(water.is_blocked)
+        for task in Task.objects.filter(title__endswith=' — تجريبي'):
+            self.assertTrue(task.owner.units.filter(pk=task.unit_id).exists())
+            task.validate_status_progress()

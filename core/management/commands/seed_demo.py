@@ -9,6 +9,8 @@ from core import services
 UNITS=['مجلس الإدارة','المدير التنفيذي','السكرتارية','مساعد المدير التنفيذي','وحدة الاتصال المؤسسي','وحدة التقنية والتحول الرقمي','وحدة الخدمات الرعوية','وحدة خدمة المجتمع','وحدة الخدمات التنموية','وحدة التطوع','وحدة الموارد البشرية','وحدة الشؤون المالية والإدارية','وحدة المراجعة الداخلية','وحدة الاستثمار','وحدة التميز المؤسسي','وحدة الخدمات المساندة']
 NAMES=['أحمد العتيبي','خالد الحربي','عبدالله السالم','يوسف الغامدي','ماجد الدوسري','صالح الرشيد','عمر القحطاني','حسن الزهراني','عبدالعزيز المطيري','إبراهيم الشمري','فهد العنزي','ناصر الفهيد','سلمان البدر','راشد الراجحي','سعد الناصر','وليد الحميد','عادل العمري','محمد الفارس']
 TITLES=['إعداد خطة السلال الغذائية','تحديث بيانات المستفيدين','تجهيز تقرير الربع الثالث','إطلاق حملة التطوع','مراجعة عروض الموردين','تحديث سياسات الموارد البشرية','إعداد مادة البرنامج التدريبي','اعتماد ميزانية البرنامج','تصميم إعلان البرنامج','حجز القاعة التدريبية','مراجعة أمن أنظمة الجمعية','متابعة تكليفات اللجنة التنفيذية','تجهيز تقرير أثر التبرعات','إعداد دراسة فرصة استثمارية','توثيق شواهد التميز المؤسسي','صيانة تجهيزات المكتب','متابعة مبادرة سقيا الماء','تنسيق شراكات مجتمعية','مراجعة إجراءات التسجيل','تحسين نموذج رضا المستفيدين','أرشفة محاضر الاجتماعات','تجهيز خطة تدريب الموظفين','متابعة التزامات الشراكات','تحديث سجل المخاطر','تجهيز التقرير المالي','تطوير بوابة الخدمات','مراجعة خطة التواصل','إعداد دليل المتطوع','تحسين إجراءات صرف الدعم','إغلاق توصيات المراجعة']
+# Lead units follow the work itself, rather than a randomly selected employee.
+TASK_UNITS=[6,6,14,9,11,15,8,11,4,15,5,14,4,13,14,15,6,7,7,14,15,15,4,12,11,5,4,9,6,12]
 class Command(BaseCommand):
     help='Create fictional Arabic demo records. Requires DEMO_PASSWORD and never runs automatically in production.'
     @transaction.atomic
@@ -29,13 +31,19 @@ class Command(BaseCommand):
         m=Meeting.objects.create(number='MTG-DEMO-01',name='اجتماع اللجنة التنفيذية — تجريبي',committee='اللجنة التنفيذية',date=today-timedelta(days=8))
         decisions=[services.save_decision(users[1],{'number':f'DEC-DEMO-{i+1:02d}','meeting':m,'text':text,'date':m.date,'due_date':today+timedelta(days=7+i*3),'issuing_authority':['board','assembly','committee'][i],'approved_minutes_number':f'MIN-DEMO-{i+1:02d}','followup_owner':users[1],'status':DecisionStatus.ACTIVE},minutes_file=ContentFile('محضر تجريبي للمعاينة فقط، لا يمثل محضرًا معتمدًا للجمعية.'.encode('utf-8'),name=f'minutes-demo-{i+1:02d}.txt')) for i,text in enumerate(['إطلاق برنامج لتنمية مهارات المستفيدين','تحسين آلية متابعة تنفيذ التكليفات','تطوير خدمات الجمعية الرقمية'])]
         for i,title in enumerate(TITLES):
-            owner=users[9+i%9]; unit=owner.units.first(); due=today+timedelta(days=(i%12)-5)
+            unit=units[TASK_UNITS[i]]
+            owner=next((u for u in users[9:] if u.units.filter(pk=unit.pk).exists()),users[9+i%9])
+            owner.units.add(unit)
+            due=today+timedelta(days=(i%12)-5)
             task=services.create_task(users[1],{'title':title+' — تجريبي','description':'تكليف تجريبي لا يمثل نشاطًا فعليًا للجمعية. يوثق التنفيذ والمخرجات المطلوبة.','unit':unit,'owner':owner,'start_date':today-timedelta(days=14),'due_date':due,'priority':Priority.values[i%5],'expected_result':'مخرج موثّق قابل للمراجعة والاعتماد','success_indicator':'اعتماد المخرج من رئيس الوحدة','decision':decisions[i%3] if i<10 else None,'source':Source.DECISION if i<10 else Source.PLAN},[users[9+(i+1)%9]])
             mode=i%7
             if mode==0:
                 services.update_progress(owner,task,100,'اكتمل التنفيذ التجريبي','إنجاز وتسليم المخرج','لا يوجد'); task.refresh_from_db(); services.change_status(unit.head,task,Status.CLOSED,'اعتماد مخرج تجريبي')
             elif mode==1: services.update_progress(owner,task,100,'طلب اعتماد تجريبي','اكتمل العمل','لا يوجد')
             elif mode==2:
+                services.update_progress(owner,task,25,'بدء التنفيذ التجريبي','بدء التنسيق وتجهيز الطلب','انتظار اعتماد المورد')
+                task.refresh_from_db()
+                services.change_status(owner,task,Status.WAITING,'بانتظار اعتماد المورد لاستكمال التنفيذ — تجريبي')
                 services.report_obstacle(owner,task,{'kind':'انتظار اعتماد','description':'اعتماد مورد مطلوب — تجريبي','reason':'انتظار اعتماد المورد — تجريبي','caused_by':'وحدة أخرى','needs_decision':True,'requested_action':'مراجعة الطلب وتحديد الإجراء','intervention_owner':unit.head,'expected_resolution':today+timedelta(days=2),'impact':'high'})
             else: services.update_progress(owner,task,[25,50,75,10][mode-3],'تحديث تجريبي','تنفيذ جزء من المطلوب','استكمال المخرج')
             services.add_comment(owner,task,'تحديث تجريبي: تم بدء التنسيق مع فريق العمل.')
