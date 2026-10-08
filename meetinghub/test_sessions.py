@@ -198,8 +198,10 @@ class MeetingSessionTests(TestCase):
         from django.core.management import call_command
         from io import StringIO
         self.issue();Reminder.objects.all().update(due_at=timezone.now()-timedelta(seconds=1))
-        call_command('run_scheduler',once=True,stdout=StringIO());self.assertEqual(Reminder.objects.filter(delivered_at__isnull=False).count(),12)
-        call_command('run_scheduler',once=True,stdout=StringIO());self.assertEqual(Reminder.objects.filter(delivered_at__isnull=False).count(),12)
+        # TestCase owns a transaction; the standalone scheduler check covers real cleanup.
+        with patch('core.management.commands.run_scheduler.close_old_connections'):
+            call_command('run_scheduler',once=True,stdout=StringIO());self.assertEqual(Reminder.objects.filter(delivered_at__isnull=False).count(),12)
+            call_command('run_scheduler',once=True,stdout=StringIO());self.assertEqual(Reminder.objects.filter(delivered_at__isnull=False).count(),12)
     def test_personal_invitation_list_uses_session_identity(self):
         self.issue();self.client.force_login(self.users['member']);r=self.client.get('/meetings/');self.assertContains(r,'دعواتي');self.assertEqual(r.context['personal'].count(),1)
         self.client.force_login(self.users['outsider']);r=self.client.get('/meetings/');self.assertEqual(r.context['personal'].count(),0)
