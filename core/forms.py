@@ -75,11 +75,23 @@ class MeetingForm(forms.ModelForm):
         labels={'number':'رقم الاجتماع','name':'اسم الاجتماع','committee':'اللجنة','date':'تاريخ الاجتماع'}
         widgets={'date':forms.DateInput(attrs={'type':'date'})}
 class DecisionForm(forms.ModelForm):
+    minutes_file=forms.FileField(label='مرفق المحضر المعتمد',required=False,help_text='إرفاق المحضر مطلوب عند إدخال رقمه؛ الحد الأعلى 10 ميجابايت.')
+    reason=forms.CharField(label='سبب التعديل',required=False,widget=forms.Textarea(attrs={'rows':2}))
     class Meta:
         model=Decision
-        fields=['number','meeting','text','date','followup_owner']
-        labels={'number':'رقم القرار','meeting':'الاجتماع','text':'نص القرار','date':'تاريخ القرار','followup_owner':'مسؤول المتابعة'}
-        widgets={'date':forms.DateInput(attrs={'type':'date'})}
+        fields=['number','issuing_authority','meeting','approved_minutes_number','minutes_file','text','date','due_date','status','followup_owner']
+        labels={'number':'رقم القرار','issuing_authority':'الجهة المصدرة','meeting':'الاجتماع','approved_minutes_number':'رقم المحضر المعتمد','text':'نص القرار','date':'تاريخ القرار','due_date':'تاريخ استحقاق القرار','status':'حالة القرار','followup_owner':'مسؤول المتابعة'}
+        widgets={key:forms.DateInput(attrs={'type':'date'}) for key in ['date','due_date']}
+    def __init__(self,*args,**kwargs):
+        super().__init__(*args,**kwargs)
+        self.fields['issuing_authority'].required=True; self.fields['due_date'].required=True
+        self.fields['reason'].required=bool(self.instance.pk)
+        self.fields['followup_owner'].queryset=User.objects.filter(is_active=True).exclude(role__in=[Role.ADMIN,Role.VIEWER])
+    def clean(self):
+        data=super().clean()
+        if data.get('minutes_file') and not data.get('approved_minutes_number'): self.add_error('approved_minutes_number','رقم المحضر مطلوب مع المرفق.')
+        if data.get('approved_minutes_number') and not data.get('minutes_file') and not self.instance.approved_minutes_attachment_id: self.add_error('minutes_file','أرفق المحضر المعتمد.')
+        return data
 class RulesForm(forms.ModelForm):
     class Meta:
         model=RuleSettings

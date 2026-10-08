@@ -39,12 +39,28 @@ class Meeting(models.Model):
     committee=models.CharField(max_length=200)
     date=models.DateField()
     def __str__(self): return self.name
+class DecisionStatus(models.TextChoices):
+    OPEN='open','مفتوح'
+    ACTIVE='active','قيد التنفيذ'
+    EXECUTED='executed','منفّذ'
+    AMENDED='amended','معدّل'
+    CANCELLED='cancelled','ملغى'
 class Decision(models.Model):
     number=models.CharField(max_length=60,unique=True)
     meeting=models.ForeignKey(Meeting,on_delete=models.PROTECT,related_name='decisions')
     text=models.TextField()
     date=models.DateField()
     followup_owner=models.ForeignKey(User,on_delete=models.PROTECT)
+    issuing_authority=models.CharField(max_length=20,choices=[('board','مجلس الإدارة'),('assembly','الجمعية العمومية'),('committee','لجنة')],blank=True,default='')
+    approved_minutes_number=models.CharField(max_length=100,blank=True)
+    approved_minutes_attachment=models.ForeignKey('Attachment',null=True,blank=True,on_delete=models.PROTECT,related_name='approved_decisions')
+    due_date=models.DateField(null=True,blank=True,db_index=True)
+    status=models.CharField(max_length=20,choices=DecisionStatus.choices,default=DecisionStatus.OPEN,db_index=True)
+    class Meta:
+        constraints=[models.CheckConstraint(condition=models.Q(status__in=DecisionStatus.values),name='decision_lifecycle_status'),models.CheckConstraint(condition=models.Q(due_date__isnull=True)|models.Q(due_date__gte=models.F('date')),name='decision_dates_order')]
+    def clean(self):
+        if self.due_date and self.date and self.due_date<self.date: raise ValidationError('استحقاق القرار يجب أن يلي تاريخ القرار أو يوافقه.')
+        if self.pk and self.approved_minutes_attachment_id and self.approved_minutes_attachment.decision_id!=self.pk: raise ValidationError('المحضر يجب أن يكون مرفقًا بالقرار نفسه.')
     @property
     def progress(self):
         values=list(self.tasks.values_list('progress',flat=True))
@@ -190,6 +206,7 @@ class Obstacle(models.Model):
     resolution=models.TextField(blank=True)
 class Audit(models.Model):
     task=models.ForeignKey(Task,null=True,on_delete=models.PROTECT,related_name='activities')
+    decision=models.ForeignKey(Decision,null=True,blank=True,on_delete=models.PROTECT,related_name='activities')
     actor=models.ForeignKey(User,null=True,on_delete=models.PROTECT)
     action=models.CharField(max_length=200)
     old=models.JSONField(default=dict)
@@ -200,6 +217,30 @@ class Audit(models.Model):
         if self.pk: raise ValidationError('سجل النشاط غير قابل للتعديل.')
         return super().save(*args,**kwargs)
     def delete(self,*args,**kwargs): raise ValidationError('سجل النشاط غير قابل للحذف.')
+    @property
+    def reason(self): return self.new.get('reason') or self.new.get('comment') or self.new.get('resolution') or 'لم يسجّل سبب مستقل لهذا الإجراء'
+    @property
+    def event_time(self):
+        from django.utils.dateparse import parse_datetime
+        return parse_datetime(self.new.get('original_created_at','')) or self.created_at
+    @property
+    def changes(self):
+        fields={'status':'الحالة','progress':'نسبة التنفيذ','approved_progress':'نسبة الاعتماد','due_date':'تاريخ الاستحقاق','approved_minutes_number':'رقم المحضر المعتمد','issuing_authority':'الجهة المصدرة','text':'نص القرار','approved_minutes_attachment_id':'مرفق المحضر'}
+        rows=[]
+        for key,label in fields.items():
+            if key not in self.old and key not in self.new: continue
+            old=self.old.get(key); new=self.new.get(key)
+            if old==new: continue
+            def display(value):
+                if value is None or value=='': return '—'
+                if key=='status':
+                    choices=DecisionStatus.choices if self.decision_id else Status.choices
+                    return dict(choices).get(value,value)
+                if key in ['progress','approved_progress']: return f'{value}%'
+                if key=='issuing_authority': return dict(Decision._meta.get_field(key).choices).get(value,value)
+                return value
+            rows.append({'field':label,'old':display(old),'new':display(new)})
+        return rows
 class Notification(models.Model):
     recipient=models.ForeignKey(User,on_delete=models.PROTECT,related_name='notifications')
     task=models.ForeignKey(Task,null=True,on_delete=models.PROTECT)

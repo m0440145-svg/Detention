@@ -308,3 +308,113 @@ class AcceptanceTests(TestCase):
         self.assertFalse(admin.site._registry[Task].has_view_permission(request))
         self.assertFalse(admin.site._registry[Task].has_change_permission(request))
         self.assertTrue(admin.site._registry[Unit].has_view_permission(request))
+
+    def decision_data(self,**kwargs):
+        meeting=Meeting.objects.create(number='MEETING-'+str(Meeting.objects.count()),name='اجتماع المجلس',committee='مجلس الإدارة',date=self.today)
+        return {'number':'DECISION-'+str(Decision.objects.count()),'meeting':meeting,'text':'اعتماد برنامج تنمية المهارات','date':self.today,'due_date':self.today+timedelta(days=10),'issuing_authority':'board','status':DecisionStatus.OPEN,'followup_owner':self.executive,**kwargs}
+
+    def test_decision_fields_form_and_protected_minutes(self):
+        data=self.decision_data(approved_minutes_number='MIN-01')
+        payload={key:str(value) if hasattr(value,'isoformat') else value.pk if hasattr(value,'pk') else value for key,value in data.items()}
+        payload['minutes_file']=SimpleUploadedFile('minutes.pdf',b'%PDF-1.4\nApproved minutes')
+        self.client.force_login(self.executive)
+        response=self.client.post('/manage/decision/new/',payload)
+        self.assertEqual(response.status_code,302,response.content.decode()[:300])
+        d=Decision.objects.get(number=data['number']); self.assertIsNotNone(d.approved_minutes_attachment_id)
+        self.assertEqual(d.approved_minutes_attachment.decision_id,d.pk)
+        self.assertEqual(d.issuing_authority,'board'); self.assertEqual(d.due_date,data['due_date'])
+        self.assertTrue(d.activities.filter(action='إنشاء القرار',actor=self.executive).exists())
+        self.assertContains(self.client.get(f'/decisions/{d.pk}/'),'مرفق المحضر المعتمد')
+        self.assertEqual(self.client.get(f'/files/{d.approved_minutes_attachment_id}/').status_code,200)
+        self.client.force_login(self.outsider); self.assertEqual(self.client.get(f'/files/{d.approved_minutes_attachment_id}/').status_code,404)
+        self.client.force_login(self.admin); self.assertEqual(self.client.get('/manage/decision/new/').status_code,403)
+
+    def test_decision_status_due_changes_require_reason_and_audit(self):
+        d=save_decision(self.executive,self.decision_data())
+        self.api.force_authenticate(self.executive)
+        target=self.today+timedelta(days=15)
+        response=self.api.patch(f'/api/decisions/{d.pk}/',{'status':'amended','due_date':str(target)},format='json')
+        self.assertEqual(response.status_code,400)
+        d.refresh_from_db(); self.assertEqual(d.status,DecisionStatus.OPEN)
+        response=self.api.patch(f'/api/decisions/{d.pk}/',{'status':'amended','due_date':str(target),'reason':'تمديد بقرار المجلس'},format='json')
+        self.assertEqual(response.status_code,200,response.data)
+        event=d.activities.filter(action='تعديل القرار').first()
+        self.assertEqual(event.old['status'],'open'); self.assertEqual(event.new['status'],'amended')
+        self.assertEqual(event.old['due_date'],str(self.today+timedelta(days=10))); self.assertEqual(event.new['due_date'],str(target))
+        self.assertEqual(event.actor,self.executive); self.assertEqual(event.reason,'تمديد بقرار المجلس')
+        self.client.force_login(self.executive); page=self.client.get(f'/decisions/{d.pk}/')
+        for text in ['سجل تدقيق القرار','تمديد بقرار المجلس','قبل التغيير','بعد التغيير','معدّل']: self.assertContains(page,text)
+        for state in DecisionStatus.values:
+            changed=save_decision(self.executive,{'status':state},d,'تغيير موثق'); self.assertEqual(changed.status,state)
+        with self.assertRaises(DatabaseError),transaction.atomic(): Audit.objects.filter(pk=event.pk).update(new={})
+        with self.assertRaises(DatabaseError),transaction.atomic(): Audit.objects.filter(pk=event.pk).delete()
+        self.assertEqual(self.api.delete(f'/api/decisions/{d.pk}/').status_code,405)
+        self.assertEqual(self.api.patch(f'/api/decisions/{d.pk}/audit/',{'new':{}},format='json').status_code,405)
+
+    def test_decision_metrics_and_audit_do_not_reveal_hidden_tasks(self):
+        d=save_decision(self.executive,self.decision_data())
+        visible=self.task(decision=d); hidden=create_task(self.executive,self.data(decision=d,unit=self.other_unit,owner=self.outsider,confidentiality='secret'))
+        self.progress(visible,50)
+        update_progress(self.outsider,hidden,100,'تسليم سري','اكتمل','لا يوجد'); hidden.refresh_from_db()
+        change_status(self.other_head,hidden,Status.CLOSED,'اعتماد سري')
+        for user,expected in [(self.executive,(75,50,True)),(self.assistant,(75,50,True)),(self.owner,(50,0,False))]:
+            self.client.force_login(user); page=self.client.get(f'/decisions/{d.pk}/'); m=page.context['metrics']
+            self.assertEqual((m['progress'],m['approved_progress'],m['full_scope']),expected)
+            listing=self.client.get('/decisions/'); row=listing.context['decisions'][0]
+            self.assertEqual((row.visible_progress,row.visible_approved_progress),expected[:2])
+            self.api.force_authenticate(user); data=self.api.get(f'/api/decisions/{d.pk}/').data
+            self.assertEqual((data['progress'],data['approved_progress']),expected[:2])
+            events=self.api.get(f'/api/decisions/{d.pk}/audit/').data
+            if user==self.owner:
+                self.assertTrue(events); self.assertFalse(any(e['new'].get('derived') for e in events))
+                self.assertNotContains(page,'اعتماد سري'); self.assertNotContains(page,'تسليم سري')
+        self.api.force_authenticate(self.outsider)
+        self.assertEqual(self.api.patch(f'/api/decisions/{d.pk}/',{'status':'cancelled','reason':'غير مصرح'},format='json').status_code,403)
+        self.api.force_authenticate(self.admin); self.assertEqual(self.api.get(f'/api/decisions/{d.pk}/audit/').status_code,404)
+
+    def test_task_percentage_status_due_audit_includes_actor_time_reason(self):
+        d=save_decision(self.executive,self.decision_data()); t=self.task(decision=d)
+        self.progress(t,50); t.refresh_from_db()
+        event=t.activities.filter(action='تحديث الإنجاز').first()
+        self.assertEqual(event.old['progress'],0); self.assertEqual(event.new['progress'],50)
+        self.assertEqual(event.actor,self.owner); self.assertTrue(event.created_at); self.assertEqual(event.reason,'تحديث التنفيذ')
+        edit_task(self.executive,t,{'due_date':self.today+timedelta(days=7)},[self.participant],[],'موعد جديد مع المورد'); t.refresh_from_db()
+        due_event=t.activities.filter(action='تعديل المهمة').first()
+        self.assertNotEqual(due_event.old['due_date'],due_event.new['due_date'])
+        self.assertEqual(due_event.reason,'موعد جديد مع المورد')
+        self.progress(t,100); t.refresh_from_db(); change_status(self.head,t,Status.RETURNED,'نقص الشواهد'); t.refresh_from_db()
+        returned=t.activities.filter(action='تغيير الحالة').first()
+        self.assertEqual(returned.old['progress'],100); self.assertEqual(returned.new['progress'],99)
+        metric_event=d.activities.filter(new__derived=True).first()
+        self.assertEqual(metric_event.old['progress'],100); self.assertEqual(metric_event.new['progress'],99); self.assertEqual(metric_event.reason,'نقص الشواهد')
+        self.progress(t,100); t.refresh_from_db(); change_status(self.head,t,Status.CLOSED,'اعتماد الشواهد'); t.refresh_from_db()
+        metric_event=d.activities.filter(new__derived=True).first()
+        self.assertEqual(metric_event.old['approved_progress'],0); self.assertEqual(metric_event.new['approved_progress'],100)
+        self.client.force_login(self.head); page=self.client.get(f'/tasks/{t.pk}/')
+        for text in ['سجل التدقيق','موعد جديد مع المورد','تحديث التنفيذ','اعتماد الشواهد','نسبة التنفيذ','تاريخ الاستحقاق']: self.assertContains(page,text)
+
+    def test_decision_validation_and_minutes_replacement_preserves_history(self):
+        d=save_decision(self.executive,self.decision_data(approved_minutes_number='MIN-01'),minutes_file=SimpleUploadedFile('first.pdf',b'%PDF-1.4\nfirst'))
+        old_file=d.approved_minutes_attachment_id
+        with self.assertRaises(ValidationError): save_decision(self.executive,{'due_date':self.today-timedelta(days=1)},d,'موعد غير صحيح')
+        with self.assertRaises(ValidationError): save_decision(self.executive,self.decision_data(approved_minutes_number='MIN-MISSING'))
+        with self.assertRaises(ValidationError): attach_decision(self.executive,d,SimpleUploadedFile('bad.pdf',b'invalid'),'استبدال',True)
+        self.api.force_authenticate(self.executive)
+        response=self.api.post(f'/api/decisions/{d.pk}/attachments/',{'file':SimpleUploadedFile('second.pdf',b'%PDF-1.4\nsecond'),'approved_minutes':'true','reason':'اعتماد نسخة مصححة'},format='multipart')
+        self.assertEqual(response.status_code,201,response.data); d.refresh_from_db()
+        self.assertNotEqual(d.approved_minutes_attachment_id,old_file)
+        self.assertTrue(d.attachments.filter(pk=old_file).exists()); self.assertEqual(d.attachments.count(),2)
+        e=d.activities.filter(action='إرفاق المحضر المعتمد').first()
+        self.assertEqual(e.old['approved_minutes_attachment_id'],old_file); self.assertEqual(e.reason,'اعتماد نسخة مصححة')
+        self.api.force_authenticate(self.owner)
+        self.assertEqual(self.api.post('/api/decisions/',{},format='json').status_code,400)
+
+    def test_api_decision_creation_uses_audited_service(self):
+        data=self.decision_data(issuing_authority='assembly')
+        payload={key:str(value) if hasattr(value,'isoformat') else value.pk if hasattr(value,'pk') else value for key,value in data.items()}
+        response=self.api.post('/api/decisions/',payload,format='json'); self.assertEqual(response.status_code,201,response.data)
+        d=Decision.objects.get(pk=response.data['id']); self.assertTrue(d.activities.filter(action='إنشاء القرار').exists())
+        self.assertEqual(response.data['issuing_authority_label'],'الجمعية العمومية')
+        self.assertEqual(response.data['metric_scope'],'all')
+        self.api.force_authenticate(self.owner); payload.update(number='UNAUTHORIZED')
+        self.assertEqual(self.api.post('/api/decisions/',payload,format='json').status_code,403)

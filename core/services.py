@@ -24,7 +24,20 @@ def task_snapshot(task):
     data['participants']=list(task.participants.values_list('pk',flat=True)); data['participating_units']=list(task.participating_units.values_list('pk',flat=True))
     return data
 def audit(task,user,action,old=None,new=None):
-    return Audit.objects.create(task=task,actor=user,action=action,old=old or {},new=new or {})
+    old=old or {}; new=new or {}
+    item=Audit.objects.create(task=task,actor=user,action=action,old=old,new=new)
+    if task and task.decision_id and any(k in old for k in ['progress','status']):
+        d=Decision.objects.select_for_update().get(pk=task.decision_id)
+        values=list(d.tasks.values_list('progress','status')); total=len(values)
+        if total:
+            progress=round(sum(p for p,s in values)/total)
+            approved=round(sum(s==Status.CLOSED for p,s in values)/total*100)
+            previous_progress=round((sum(p for p,s in values)-task.progress+old.get('progress',task.progress))/total)
+            previous_closed=sum(s==Status.CLOSED for p,s in values)-(task.status==Status.CLOSED)+(old.get('status',task.status)==Status.CLOSED)
+            previous_approved=round(previous_closed/total*100)
+            if (previous_progress,previous_approved)!=(progress,approved):
+                Audit.objects.create(decision=d,actor=user,action='تحديث نسب القرار من '+task.code,old={'progress':previous_progress,'approved_progress':previous_approved},new={'progress':progress,'approved_progress':approved,'derived':True,'source_task_id':task.pk,'reason':new.get('reason') or new.get('comment') or action})
+    return item
 def assignment_members(task,participants):
     ids={u.pk for u in participants}
     unit_ids=[task.unit_id] if task.assignment_mode=='unit' else [task.unit_id,*task.participating_units.values_list('pk',flat=True)] if task.assignment_mode=='units' else []
@@ -43,6 +56,11 @@ def notify(task,text,users=None,key=None):
 @transaction.atomic
 def create_task(user,data,participants=(),units=()):
     require_manage(user)
+    linked_decision=data.get('decision')
+    decision_before=None
+    if linked_decision:
+        linked_decision=Decision.objects.select_for_update().get(pk=linked_decision.pk)
+        decision_before={'progress':linked_decision.progress,'approved_progress':linked_decision.approved_progress}
     task=Task(created_by=user,**data)
     if user.role==Role.HEAD and task.unit.head_id!=user.pk: raise PermissionDenied('الإسناد خارج الوحدة غير مصرح.')
     if not task.owner.is_active or task.owner.role in {Role.VIEWER,Role.ADMIN}: raise ValidationError('المسؤول الرئيسي يجب أن يكون حسابًا نشطًا له صلاحية التنفيذ.')
@@ -54,7 +72,9 @@ def create_task(user,data,participants=(),units=()):
     task.save()
     task.participating_units.set(units)
     task.participants.set(assignment_members(task,participants))
-    audit(task,user,'إنشاء وإسناد المهمة',new={'owner':task.owner_id,'participants':list(task.participants.values_list('pk',flat=True)),'unit':task.unit_id,'due_date':str(task.due_date)})
+    audit(task,user,'إنشاء وإسناد المهمة',new={'owner':task.owner_id,'participants':list(task.participants.values_list('pk',flat=True)),'unit':task.unit_id,'due_date':str(task.due_date),'reason':'إنشاء وإسناد المهمة'})
+    if linked_decision:
+        Audit.objects.create(decision=linked_decision,actor=user,action='ربط '+task.code,old=decision_before,new={'progress':linked_decision.progress,'approved_progress':linked_decision.approved_progress,'derived':True,'source_task_id':task.pk,'reason':'إنشاء وإسناد مهمة مرتبطة بالقرار'})
     notify(task,f'تم إسناد {task.code}: {task.title}')
     return task
 @transaction.atomic
@@ -69,13 +89,13 @@ def change_status(user,task,status,comment):
         if task.owner_id==user.pk: raise ValidationError('لا يجوز اعتماد المهمة بواسطة مسؤولها الرئيسي.')
         if task.progress!=100 or task.obstacles.filter(resolved_at__isnull=True).exists(): raise ValidationError('حل العوائق واستكمال الإنجاز مطلوب قبل الاعتماد.')
         task.closed_at=timezone.now()
-    old=task.status
+    old={'status':task.status,'progress':task.progress}
     task.status=status
     if status==Status.RETURNED:
         task.progress=min(task.progress,99)
         task.submitted_at=None
     task.updated_at=timezone.now(); task.save()
-    audit(task,user,'تغيير الحالة',{'status':old},{'status':status,'comment':comment})
+    audit(task,user,'تغيير الحالة',old,{'status':status,'progress':task.progress,'reason':comment})
     notify(task,f'{task.code}: {task.get_status_display()} — {comment}')
     return task
 @transaction.atomic
@@ -93,7 +113,7 @@ def update_progress(user,task,progress,comment,accomplished,remaining,from_subta
     elif task.status in {Status.ASSIGNED,Status.NEW,Status.RETURNED}: task.status=Status.ACTIVE
     task.save()
     Update.objects.create(task=task,user=user,progress=progress,comment=comment,accomplished=accomplished,remaining=remaining)
-    audit(task,user,'تحديث الإنجاز',old,{'progress':progress,'status':task.status})
+    audit(task,user,'تحديث الإنجاز',old,{'progress':progress,'status':task.status,'reason':comment})
     if progress==100: notify(task,f'{task.code}: طلب اعتماد الإنجاز')
     return task
 @transaction.atomic
@@ -187,11 +207,20 @@ def edit_task(user,task,data,participants,units,reason):
     task=Task.objects.select_for_update().get(pk=task.pk); require_manage(user,task)
     if task.status in TERMINAL: raise ValidationError('المهمة المغلقة أو الملغاة لا تقبل التعديل.')
     old=task_snapshot(task)
+    old_decision=task.decision
+    old_metrics={'progress':old_decision.progress,'approved_progress':old_decision.approved_progress} if old_decision else None
     for k,v in data.items(): setattr(task,k,v)
     if user.role==Role.HEAD and task.unit.head_id!=user.pk: raise PermissionDenied()
     if not reason.strip(): raise ValidationError('سبب التعديل مطلوب.')
     task.full_clean(); task.updated_at=timezone.now(); task.save(); task.participating_units.set(units); task.participants.set(assignment_members(task,participants))
     audit(task,user,'تعديل المهمة',old,{**task_snapshot(task),'reason':reason})
+    if old.get('decision_id')!=task.decision_id:
+        if old_decision:
+            Audit.objects.create(decision=old_decision,actor=user,action='فك ارتباط '+task.code,old=old_metrics,new={'progress':old_decision.progress,'approved_progress':old_decision.approved_progress,'derived':True,'source_task_id':task.pk,'reason':reason})
+        if task.decision_id:
+            values=list(task.decision.tasks.exclude(pk=task.pk).values_list('progress','status'))
+            before={'progress':round(sum(p for p,s in values)/len(values)) if values else 0,'approved_progress':round(sum(s==Status.CLOSED for p,s in values)/len(values)*100) if values else 0}
+            Audit.objects.create(decision=task.decision,actor=user,action='ربط '+task.code,old=before,new={'progress':task.decision.progress,'approved_progress':task.decision.approved_progress,'derived':True,'source_task_id':task.pk,'reason':reason})
     notify(task,f'{task.code}: تعديل التكليف — {reason}')
     return task
 @transaction.atomic
@@ -233,3 +262,45 @@ def run_rules(today=None):
                 e,created=Escalation.objects.get_or_create(task=task,recipient=target,level=level,defaults={'reason':f'تأخير {late} أيام'})
                 if created: notify(task,f'{task.code}: تصعيد تأخير {late} أيام',[target]); audit(task,None,'تصعيد آلي',new={'level':level,'recipient':target.pk}); count+=1
     return count
+
+
+DECISION_FIELDS=['number','meeting_id','text','date','followup_owner_id','issuing_authority','approved_minutes_number','approved_minutes_attachment_id','due_date','status']
+def decision_snapshot(decision):
+    return {key:str(getattr(decision,key)) if key in ['date','due_date'] and getattr(decision,key) else getattr(decision,key) for key in DECISION_FIELDS}
+def require_decision_manage(user):
+    if user.role not in GLOBAL_ROLES: raise PermissionDenied('إدارة القرارات من صلاحيات الإدارة التنفيذية.')
+@transaction.atomic
+def save_decision(user,data,instance=None,reason='',minutes_file=None):
+    require_decision_manage(user)
+    creating=instance is None
+    decision=Decision() if creating else Decision.objects.select_for_update().get(pk=instance.pk)
+    old={} if creating else decision_snapshot(decision)
+    if not creating and not reason.strip(): raise ValidationError('سبب تعديل القرار مطلوب.')
+    for key,value in data.items(): setattr(decision,key,value)
+    if not decision.followup_owner.is_active or decision.followup_owner.role in {Role.ADMIN,Role.VIEWER}: raise ValidationError('مسؤول متابعة القرار يجب أن يكون حسابًا نشطًا له صلاحية التنفيذ.')
+    if not decision.issuing_authority or not decision.due_date: raise ValidationError('الجهة المصدرة وتاريخ استحقاق القرار مطلوبان.')
+    if minutes_file and not decision.approved_minutes_number.strip(): raise ValidationError('أدخل رقم المحضر المعتمد مع مرفقه.')
+    if decision.approved_minutes_number and not minutes_file and not decision.approved_minutes_attachment_id: raise ValidationError('أرفق المحضر المعتمد عند إدخال رقمه.')
+    if minutes_file: validate_upload(minutes_file)
+    decision.full_clean(); decision.save()
+    if minutes_file:
+        attach_decision(user,decision,minutes_file,reason or 'إرفاق المحضر عند إنشاء القرار',approved_minutes=True)
+        decision.refresh_from_db()
+    Audit.objects.create(decision=decision,actor=user,action='إنشاء القرار' if creating else 'تعديل القرار',old=old,new={**decision_snapshot(decision),'reason':reason.strip() or 'إنشاء القرار'})
+    return decision
+@transaction.atomic
+def attach_decision(user,decision,upload,reason,approved_minutes=False):
+    require_decision_manage(user)
+    decision=Decision.objects.select_for_update().get(pk=decision.pk)
+    if not reason.strip(): raise ValidationError('سبب رفع المرفق أو استبداله مطلوب.')
+    if approved_minutes and not decision.approved_minutes_number: raise ValidationError('أدخل رقم المحضر المعتمد أولًا.')
+    validate_upload(upload)
+    original=Path(upload.name).name; upload.name=uuid.uuid4().hex+Path(original).suffix.lower()
+    item=Attachment.objects.create(decision=decision,uploaded_by=user,file=upload,original_name=original)
+    old={}; new={'attachment_id':item.pk,'name':original,'reason':reason}
+    if approved_minutes:
+        old={'approved_minutes_attachment_id':decision.approved_minutes_attachment_id}
+        decision.approved_minutes_attachment=item; decision.save(update_fields=['approved_minutes_attachment'])
+        new['approved_minutes_attachment_id']=item.pk
+    Audit.objects.create(decision=decision,actor=user,action='إرفاق المحضر المعتمد' if approved_minutes else 'رفع مرفق قرار',old=old,new=new)
+    return item

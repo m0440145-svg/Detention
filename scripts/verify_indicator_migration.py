@@ -25,8 +25,12 @@ with tempfile.TemporaryDirectory() as temp:
   if prior:
    a=Audit.objects.create(task=t,action='قديم',old={'status':prior},new={'status':status});original[a.pk]=(a.old,a.new)
  for key in ['blocked','overdue']:Catalog.objects.create(kind='status',key=key,label=key)
- executor=MigrationExecutor(connection);executor.migrate([('core','0005_task_indicators')])
- from core.models import Task as NewTask,Audit as NewAudit,Catalog as NewCatalog
+ Meeting=apps.get_model('core','Meeting'); Decision=apps.get_model('core','Decision')
+ meeting=Meeting.objects.create(number='LEGACY-MTG',name='اجتماع سابق',committee='لجنة',date=today)
+ decision=Decision.objects.create(number='LEGACY-DEC',meeting=meeting,text='قرار سابق',date=today,followup_owner=u)
+ legacy=Audit.objects.create(actor=u,action='حفظ قرار اجتماع',new={'id':decision.pk})
+ executor=MigrationExecutor(connection);executor.migrate(executor.loader.graph.leaf_nodes())
+ from core.models import Task as NewTask,Audit as NewAudit,Catalog as NewCatalog,Decision as NewDecision
  assert list(NewTask.objects.filter(pk__in=ids).order_by('pk').values_list('status',flat=True))==['waiting','external','assigned','approval']
  for pk,snapshots in original.items():
   a=NewAudit.objects.get(pk=pk);assert (a.old,a.new)==snapshots
@@ -40,4 +44,10 @@ with tempfile.TemporaryDirectory() as temp:
   with transaction.atomic():NewAudit.objects.filter(pk=next(iter(original))).update(action='tampered')
  except DatabaseError:pass
  else:raise AssertionError('Audit trigger missing')
- print('Migration verified: recovered lifecycle, fallback, preserved immutable audit, removed catalogs and enforced constraint.')
+ migrated=NewDecision.objects.get(pk=decision.pk)
+ assert migrated.due_date is None and migrated.issuing_authority==''
+ linked=NewAudit.objects.get(decision=migrated,new__original_audit_id=legacy.pk)
+ assert linked.actor_id==u.pk and linked.event_time==legacy.created_at
+ assert NewAudit.objects.get(pk=legacy.pk).decision_id is None
+ assert NewAudit.objects.get(pk=legacy.pk).new=={'id':decision.pk}
+ print('Migration verified: recovered lifecycle, fallback, preserved immutable audit, removed catalogs, enforced constraints and linked legacy decision audit without modifying originals.')

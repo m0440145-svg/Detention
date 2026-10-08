@@ -1,4 +1,5 @@
 import os
+from django.core.files.base import ContentFile
 from datetime import timedelta
 from django.core.management.base import BaseCommand,CommandError
 from django.db import transaction
@@ -26,7 +27,7 @@ class Command(BaseCommand):
             head=users[3+(i-4)%6]; units[i].head=head; units[i].save(); head.units.add(units[i])
         for i in range(9,len(users)): users[i].manager=units[4+(i%12)].head; users[i].save()
         m=Meeting.objects.create(number='MTG-DEMO-01',name='اجتماع اللجنة التنفيذية — تجريبي',committee='اللجنة التنفيذية',date=today-timedelta(days=8))
-        decisions=[Decision.objects.create(number=f'DEC-DEMO-{i+1:02d}',meeting=m,text=text,date=m.date,followup_owner=users[1]) for i,text in enumerate(['إطلاق برنامج لتنمية مهارات المستفيدين','تحسين آلية متابعة تنفيذ التكليفات','تطوير خدمات الجمعية الرقمية'])]
+        decisions=[services.save_decision(users[1],{'number':f'DEC-DEMO-{i+1:02d}','meeting':m,'text':text,'date':m.date,'due_date':today+timedelta(days=7+i*3),'issuing_authority':['board','assembly','committee'][i],'approved_minutes_number':f'MIN-DEMO-{i+1:02d}','followup_owner':users[1],'status':DecisionStatus.ACTIVE},minutes_file=ContentFile('محضر تجريبي للمعاينة فقط، لا يمثل محضرًا معتمدًا للجمعية.'.encode('utf-8'),name=f'minutes-demo-{i+1:02d}.txt')) for i,text in enumerate(['إطلاق برنامج لتنمية مهارات المستفيدين','تحسين آلية متابعة تنفيذ التكليفات','تطوير خدمات الجمعية الرقمية'])]
         for i,title in enumerate(TITLES):
             owner=users[9+i%9]; unit=owner.units.first(); due=today+timedelta(days=(i%12)-5)
             task=services.create_task(users[1],{'title':title+' — تجريبي','description':'تكليف تجريبي لا يمثل نشاطًا فعليًا للجمعية. يوثق التنفيذ والمخرجات المطلوبة.','unit':unit,'owner':owner,'start_date':today-timedelta(days=14),'due_date':due,'priority':Priority.values[i%5],'expected_result':'مخرج موثّق قابل للمراجعة والاعتماد','success_indicator':'اعتماد المخرج من رئيس الوحدة','decision':decisions[i%3] if i<10 else None,'source':Source.DECISION if i<10 else Source.PLAN},[users[9+(i+1)%9]])

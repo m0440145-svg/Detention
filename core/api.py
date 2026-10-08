@@ -9,7 +9,7 @@ from rest_framework.views import exception_handler
 from .models import *
 from .policy import *
 from . import services
-from .views import filter_tasks, kpis,decisions_for
+from .views import filter_tasks, kpis,decisions_for,decision_metrics,decision_activities
 
 def exceptions(exc,context):
     if isinstance(exc,DjangoValidationError): exc=APIValidationError(exc.messages)
@@ -133,11 +133,24 @@ class UnitViewSet(viewsets.ModelViewSet):
 class DecisionSerializer(serializers.ModelSerializer):
     progress=serializers.SerializerMethodField()
     approved_progress=serializers.SerializerMethodField()
-    class Meta: model=Decision; fields=['id','number','meeting','text','date','followup_owner','progress','approved_progress']
-    def get_progress(self,obj): return round(tasks_for(self.context['request'].user).filter(decision=obj).aggregate(p=__import__('django').db.models.Avg('progress'))['p'] or 0)
-    def get_approved_progress(self,obj):
-        qs=tasks_for(self.context['request'].user).filter(decision=obj); n=qs.count()
-        return round(qs.filter(status=Status.CLOSED).count()/n*100) if n else 0
+    metric_scope=serializers.SerializerMethodField()
+    status_label=serializers.CharField(source='get_status_display',read_only=True)
+    issuing_authority_label=serializers.CharField(source='get_issuing_authority_display',read_only=True)
+    minutes_file=serializers.FileField(write_only=True,required=False)
+    reason=serializers.CharField(write_only=True,required=False)
+    class Meta:
+        model=Decision
+        fields=['id','number','meeting','text','date','followup_owner','issuing_authority','issuing_authority_label','approved_minutes_number','approved_minutes_attachment','minutes_file','due_date','status','status_label','progress','approved_progress','metric_scope','reason']
+        read_only_fields=['approved_minutes_attachment']
+    def get_progress(self,obj): return decision_metrics(self.context['request'].user,obj)['progress']
+    def get_approved_progress(self,obj): return decision_metrics(self.context['request'].user,obj)['approved_progress']
+    def get_metric_scope(self,obj): return 'all' if self.context['request'].user.role in GLOBAL_ROLES else 'visible'
+    def create(self,data):
+        reason=data.pop('reason',''); upload=data.pop('minutes_file',None)
+        return services.save_decision(self.context['request'].user,data,reason=reason,minutes_file=upload)
+    def update(self,instance,data):
+        reason=data.pop('reason',''); upload=data.pop('minutes_file',None)
+        return services.save_decision(self.context['request'].user,data,instance,reason,upload)
 class DecisionViewSet(viewsets.ModelViewSet):
     serializer_class=DecisionSerializer
     http_method_names=['get','post','patch','put','head','options']
@@ -146,7 +159,17 @@ class DecisionViewSet(viewsets.ModelViewSet):
     def perform_update(self,serializer): self.write(serializer)
     def write(self,serializer):
         if self.request.user.role not in GLOBAL_ROLES: raise APIPermissionDenied()
-        d=serializer.save(); services.audit(None,self.request.user,'حفظ قرار',new={'id':d.pk})
+        serializer.save()
+    @action(detail=True,methods=['get'])
+    def audit(self,request,pk=None):
+        decision=self.get_object()
+        return Response(list(decision_activities(request.user,decision).values('id','actor_id','action','old','new','created_at')))
+    @action(detail=True,methods=['post'])
+    def attachments(self,request,pk=None):
+        decision=self.get_object()
+        if not request.FILES.get('file'): raise APIValidationError('اختر ملفًا.')
+        item=services.attach_decision(request.user,decision,request.FILES['file'],request.data.get('reason',''),approved_minutes=str(request.data.get('approved_minutes','')).lower() in ['true','1','on'])
+        return Response({'id':item.pk,'name':item.original_name,'url':f'/files/{item.pk}/'},status=201)
     @action(detail=True,methods=['post'],url_path='convert-to-task')
     def convert(self,request,pk=None):
         d=self.get_object(); data=request.data.copy(); data.update({'decision':d.pk,'source':Source.DECISION,'description':d.text})

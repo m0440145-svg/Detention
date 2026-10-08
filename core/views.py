@@ -149,7 +149,7 @@ def task_detail(request,pk):
     task.refresh_from_db()
     statuses=services.TRANSITIONS.get(task.status,set())
     if not can_manage(request.user,task): statuses=statuses-{Status.CLOSED,Status.RETURNED,Status.CANCELLED,Status.PAUSED}
-    return render(request,'core/detail.html',{'task':task,'error':error,'can_work':can_work(request.user,task),'can_manage':can_manage(request.user,task),'next_statuses':[(s,Catalog.objects.filter(kind='status',key=s).values_list('label',flat=True).first() or Status(s).label) for s in statuses if not Catalog.objects.filter(kind='status',key=s,active=False).exists()],'progress_form':ProgressForm(initial={'progress':task.progress}),'comment_form':CommentForm(task=task),'obstacle_form':ObstacleForm(task=task),'subtask_form':SubtaskForm(),'flags':services.flags(task),'comments':task.comments.select_related('user','parent').prefetch_related('mentions','mentioned_units','attachments').order_by('created_at')})
+    return render(request,'core/detail.html',{'task':task,'error':error,'can_work':can_work(request.user,task),'can_manage':can_manage(request.user,task),'next_statuses':[(s,Catalog.objects.filter(kind='status',key=s).values_list('label',flat=True).first() or Status(s).label) for s in statuses if not Catalog.objects.filter(kind='status',key=s,active=False).exists()],'progress_form':ProgressForm(initial={'progress':task.progress}),'comment_form':CommentForm(task=task),'obstacle_form':ObstacleForm(task=task),'subtask_form':SubtaskForm(),'flags':services.flags(task),'activities':task.activities.select_related('actor'),'comments':task.comments.select_related('user','parent').prefetch_related('mentions','mentioned_units','attachments').order_by('created_at')})
 FOLLOW_TABS=[('overdue','المتأخرة'),('blocked','المتعثرة'),('today','تستحق اليوم'),('soon','خلال 3 أيام'),('stale','بدون تحديث'),('waiting','بانتظار رد'),('approval','بانتظار اعتماد'),('critical','الحرجة'),('escalated','المصعدة'),('returned','المعادة'),('risk','مرشحة للتعثر')]
 @login_required
 def followup(request):
@@ -166,32 +166,41 @@ def followup(request):
     else: qs=qs.filter(status=tab) if tab in Status.values else qs.none()
     return render(request,'core/tasks.html',{'page':Paginator(qs,20).get_page(request.GET.get('page')),'title':'مركز المتابعة','tabs':FOLLOW_TABS,'tab':tab,**choices(request.user)})
 def decisions_for(user):
-    qs=Decision.objects.select_related('meeting','followup_owner').prefetch_related('tasks')
+    qs=Decision.objects.select_related('meeting','followup_owner','approved_minutes_attachment').prefetch_related('tasks')
     if user.role==Role.ADMIN: return qs.none()
     if user.role in GLOBAL_ROLES: return qs
     return qs.filter(Q(tasks__in=tasks_for(user))|Q(followup_owner=user)).distinct()
+def decision_metrics(user,decision):
+    tasks=tasks_for(user).filter(decision=decision); total=tasks.count()
+    return {'progress':round(tasks.aggregate(p=Avg('progress'))['p'] or 0),'approved_progress':round(tasks.filter(status=Status.CLOSED).count()/total*100) if total else 0,'total':total,'full_scope':user.role in GLOBAL_ROLES}
+def decision_activities(user,decision):
+    qs=decision.activities.select_related('actor')
+    # Calculated whole-decision percentages can reveal hidden task performance.
+    if user.role not in GLOBAL_ROLES: qs=qs.filter(Q(new__derived__isnull=True)|Q(new__derived=False))
+    return qs
 @login_required
 def decisions(request):
     require_operational(request.user)
-    return render(request,'core/decisions.html',{'decisions':decisions_for(request.user),'manage':request.user.role in GLOBAL_ROLES,'meetings':Meeting.objects.all() if request.user.role in GLOBAL_ROLES else Meeting.objects.filter(decisions__in=decisions_for(request.user)).distinct()})
+    rows=[]
+    for decision in decisions_for(request.user):
+        metrics=decision_metrics(request.user,decision)
+        decision.visible_progress=metrics['progress']; decision.visible_approved_progress=metrics['approved_progress']
+        rows.append(decision)
+    return render(request,'core/decisions.html',{'decisions':rows,'manage':request.user.role in GLOBAL_ROLES,'full_scope':request.user.role in GLOBAL_ROLES,'meetings':Meeting.objects.all() if request.user.role in GLOBAL_ROLES else Meeting.objects.filter(decisions__in=decisions_for(request.user)).distinct()})
 @login_required
 def decision_detail(request,pk):
     require_operational(request.user)
     decision=get_object_or_404(decisions_for(request.user),pk=pk)
     error=None
     if request.method=='POST':
-        if request.user.role not in GLOBAL_ROLES: raise PermissionDenied()
+        services.require_decision_manage(request.user)
         try:
             upload=request.FILES.get('file')
             if not upload: raise ValidationError('اختر الملف.')
-            services.validate_upload(upload)
-            original=__import__('pathlib').Path(upload.name).name
-            upload.name=__import__('uuid').uuid4().hex+__import__('pathlib').Path(original).suffix.lower()
-            Attachment.objects.create(decision=decision,uploaded_by=request.user,file=upload,original_name=original)
-            services.audit(None,request.user,'رفع مرفق قرار',new={'decision':decision.pk,'name':original})
+            services.attach_decision(request.user,decision,upload,request.POST.get('reason',''),approved_minutes=request.POST.get('approved_minutes')=='on')
             return redirect('decision-detail',pk=pk)
         except ValidationError as e: error=' — '.join(e.messages)
-    return render(request,'core/decision.html',{'decision':decision,'tasks':tasks_for(request.user).filter(decision=decision),'manage':request.user.role in GLOBAL_ROLES,'error':error})
+    return render(request,'core/decision.html',{'decision':decision,'tasks':tasks_for(request.user).filter(decision=decision),'metrics':decision_metrics(request.user,decision),'activities':decision_activities(request.user,decision),'manage':request.user.role in GLOBAL_ROLES,'error':error})
 @login_required
 def generic_form(request,kind,pk=None):
     definitions={'unit':(Unit,UnitForm,'وحدة تنظيمية'),'employee':(User,EmployeeForm,'موظف'),'meeting':(Meeting,MeetingForm,'اجتماع'),'decision':(Decision,DecisionForm,'قرار اجتماع')}
@@ -201,11 +210,18 @@ def generic_form(request,kind,pk=None):
     model,klass,label=definitions[kind]
     instance=get_object_or_404(model,pk=pk) if pk else None
     if kind=='employee' and pk: klass=EmployeeEditForm
-    form=klass(request.POST or None,instance=instance)
+    form=klass(request.POST or None,request.FILES or None,instance=instance)
     if request.method=='POST' and form.is_valid():
-        item=form.save()
+        if kind=='decision':
+            try:
+                data={key:form.cleaned_data[key] for key in DecisionForm.Meta.fields if key!='minutes_file'}
+                item=services.save_decision(request.user,data,instance,form.cleaned_data.get('reason',''),form.cleaned_data.get('minutes_file'))
+            except ValidationError as e:
+                form.add_error(None,e)
+                return render(request,'core/form.html',{'form':form,'title':('تعديل ' if pk else 'إضافة ')+label})
+        else: item=form.save()
         if kind=='unit' and item.head: item.head.units.add(item)
-        services.audit(None,request.user,'حفظ '+label,new={'id':item.pk})
+        if kind!='decision': services.audit(None,request.user,'حفظ '+label,new={'id':item.pk})
         messages.success(request,'تم الحفظ.'); return redirect('directory' if kind in ['unit','employee'] else 'decisions')
     return render(request,'core/form.html',{'form':form,'title':('تعديل ' if pk else 'إضافة ')+label})
 @login_required
