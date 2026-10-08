@@ -588,12 +588,25 @@ class AcceptanceTests(TestCase):
         before=Notification.objects.count(); run_rules(today=self.today+timedelta(days=7))
         self.assertEqual(Notification.objects.count(),before)
 
+@override_settings(DEBUG=True,SECURE_SSL_REDIRECT=False)
+class SchedulerRuntimeTests(TestCase):
     def test_scheduler_command_executes_rules_without_web_request(self):
         from django.core.management import call_command
-        t=self.task(start_date=self.today-timedelta(days=10),due_date=self.today-timedelta(days=3))
-        output=io.StringIO(); call_command('run_scheduler',once=True,stdout=output)
+        today=timezone.localdate()
+        unit=Unit.objects.create(name='وحدة اختبار المجدول')
+        people={}
+        for role in [Role.EXECUTIVE,Role.ASSISTANT,Role.HEAD,Role.EMPLOYEE]:
+            user=User.objects.create_user(username='scheduler-'+role,email=role+'@example.invalid',employee_number=role,role=role)
+            user.units.add(unit); people[role]=user
+        unit.head=people[Role.HEAD]; unit.save()
+        t=create_task(people[Role.EXECUTIVE],{'title':'اختبار تشغيل المجدول','description':'اختبار مستقل','unit':unit,'owner':people[Role.EMPLOYEE],'start_date':today-timedelta(days=10),'due_date':today-timedelta(days=3),'expected_result':'نتيجة','success_indicator':'مؤشر'},[])
+        output=io.StringIO()
+        # Preserve the enclosing TestCase transaction; standalone command lifecycle
+        # is verified separately against an isolated database.
+        with patch('core.management.commands.run_scheduler.close_old_connections'):
+            call_command('run_scheduler',once=True,stdout=output)
         self.assertIn('rules evaluated',output.getvalue())
-        self.assertTrue(t.escalations.filter(level=1,recipient=self.head).exists())
-        self.assertTrue(t.escalations.filter(level=2,recipient=self.assistant).exists())
+        self.assertTrue(t.escalations.filter(level=1,recipient=people[Role.HEAD]).exists())
+        self.assertTrue(t.escalations.filter(level=2,recipient=people[Role.ASSISTANT]).exists())
         self.assertFalse(t.escalations.filter(level=3).exists())
         self.assertTrue(t.activities.filter(action='تصعيد آلي').exists())
