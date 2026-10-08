@@ -211,3 +211,15 @@ class BulkFollowupSerializer(serializers.Serializer):
 def bulk_followup(request):
     serializer=BulkFollowupSerializer(data=request.data); serializer.is_valid(raise_exception=True)
     return Response(services.bulk_followup(request.user,**serializer.validated_data))
+
+
+@api_view(['GET'])
+def session_user(request):
+    return Response({'id':request.user.pk,'name':str(request.user),'role':request.user.role})
+
+@api_view(['POST'])
+def session_logout(request):
+    from django.contrib.auth import logout
+    services.audit(None,request.user,'تسجيل خروج')
+    logout(request)
+    return Response({'detail':'تم تسجيل الخروج'})

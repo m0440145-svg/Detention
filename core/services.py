@@ -241,7 +241,7 @@ def flags(task,rules=None,today=None):
     result=[]
     if task.due_date<today: result.append('متأخرة')
     if task.is_blocked: result.append('متعثرة')
-    if (today-task.updated_at.date()).days>=r.stale_days: result.append('بدون تحديث')
+    if (today-timezone.localtime(task.updated_at).date()).days>=r.stale_days: result.append('بدون تحديث')
     duration=max((task.due_date-task.start_date).days,1)
     elapsed=max(0,(today-task.start_date).days)/duration*100
     if elapsed>=r.followup_elapsed and task.progress==0: result.append('بحاجة متابعة')
@@ -252,7 +252,6 @@ def run_rules(today=None):
     today=today or timezone.localdate(); r=RuleSettings.current(); count=0
     for task in Task.objects.select_for_update().exclude(status__in=TERMINAL).select_related('unit','owner'):
         for flag in flags(task,r,today): notify(task,f'{task.code}: {flag}',key=f'flag:{task.pk}:{flag}:{today}')
-        if task.status in {Status.APPROVAL,Status.COMPLETED}: continue
         days=(task.due_date-today).days
         if 0<=days<=r.remind_days:
             targets=recipients(task) if days==0 else User.objects.filter(pk__in=[task.owner_id,*task.participants.values_list('pk',flat=True)],is_active=True)
@@ -264,7 +263,7 @@ def run_rules(today=None):
             if late<threshold: continue
             for target in targets:
                 e,created=Escalation.objects.get_or_create(task=task,recipient=target,level=level,defaults={'reason':f'تأخير {late} أيام'})
-                if created: notify(task,f'{task.code}: تصعيد تأخير {late} أيام',[target]); audit(task,None,'تصعيد آلي',new={'level':level,'recipient':target.pk}); count+=1
+                if created: notify(task,f'{task.code}: تصعيد تأخير {late} أيام',[target]); audit(task,None,'تصعيد آلي',new={'level':level,'recipient':target.pk,'late_days':late,'threshold_days':threshold,'reason':e.reason}); count+=1
     return count
 
 

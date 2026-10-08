@@ -537,3 +537,63 @@ class AcceptanceTests(TestCase):
         for task in Task.objects.filter(title__endswith=' — تجريبي'):
             self.assertTrue(task.owner.units.filter(pk=task.unit_id).exists())
             task.validate_status_progress()
+
+    def test_real_api_session_upload_download_permissions_and_logout(self):
+        t=self.task()
+        c=APIClient(enforce_csrf_checks=True)
+        self.assertEqual(c.get('/api/auth/me/').status_code,403)
+        self.assertEqual(c.post('/api/auth/login/',{'username':self.owner.email,'password':'Test-Only-Strong-Password!'},format='json').status_code,403)
+        token=c.get('/api/auth/csrf/').json()['csrf_token']
+        result=c.post('/api/auth/login/',{'username':self.owner.email,'password':'Test-Only-Strong-Password!'},format='json',HTTP_X_CSRFTOKEN=token)
+        self.assertEqual(result.status_code,200,result.content)
+        token=result.json()['csrf_token']
+        self.assertEqual(c.get('/api/auth/me/').json()['id'],self.owner.pk)
+        self.assertEqual(c.post(f'/api/tasks/{t.pk}/attachments/',{'file':SimpleUploadedFile('proof.txt',b'actual upload')},format='multipart').status_code,403)
+        result=c.post(f'/api/tasks/{t.pk}/attachments/',{'file':SimpleUploadedFile('proof.txt',b'actual upload')},format='multipart',HTTP_X_CSRFTOKEN=token)
+        self.assertEqual(result.status_code,201,result.content)
+        download=c.get(result.json()['url'])
+        self.assertEqual(b''.join(download.streaming_content),b'actual upload')
+        self.assertEqual(c.post('/api/auth/logout/',{},format='json',HTTP_X_CSRFTOKEN=token).status_code,200)
+        self.assertEqual(c.get('/api/auth/me/').status_code,403)
+        token=c.get('/api/auth/csrf/').json()['csrf_token']
+        result=c.post('/api/auth/login/',{'username':self.outsider.phone,'password':'Test-Only-Strong-Password!'},format='json',HTTP_X_CSRFTOKEN=token)
+        self.assertEqual(result.status_code,200,result.content)
+        self.assertEqual(c.get(f'/files/{Attachment.objects.get(task=t).pk}/').status_code,404)
+        self.assertEqual(c.post(f'/api/tasks/{t.pk}/attachments/',{'file':SimpleUploadedFile('proof.txt',b'forbidden')},format='multipart',HTTP_X_CSRFTOKEN=result.json()['csrf_token']).status_code,404)
+        self.assertEqual(Attachment.objects.filter(task=t).count(),1)
+
+    def test_api_login_limit_shared_with_html_and_inactive_user_denied(self):
+        c=APIClient(enforce_csrf_checks=True)
+        token=c.get('/api/auth/csrf/').json()['csrf_token']
+        for i in range(5):
+            response=c.post('/api/auth/login/',{'username':' BAD@example.invalid ','password':'bad'},format='json',HTTP_X_CSRFTOKEN=token)
+            self.assertEqual(response.status_code,401)
+        self.assertEqual(c.post('/api/auth/login/',{'username':'bad@example.invalid','password':'bad'},format='json',HTTP_X_CSRFTOKEN=token).status_code,429)
+        self.assertContains(self.client.post('/login/',{'username':'bad@example.invalid','password':'bad'}),'محاولات كثيرة')
+        self.owner.is_active=False; self.owner.save()
+        LoginAttempt.objects.all().delete()
+        self.assertEqual(c.post('/api/auth/login/',{'username':self.owner.email,'password':'Test-Only-Strong-Password!'},format='json',HTTP_X_CSRFTOKEN=token).status_code,401)
+
+    def test_scheduler_uses_exact_configured_days_and_includes_pending_approval(self):
+        r=RuleSettings.current(); r.head_after=2; r.assistant_after=4; r.executive_after=6; r.save()
+        t=self.task(start_date=self.today-timedelta(days=20),due_date=self.today)
+        self.progress(t,100); t.refresh_from_db()
+        for day,levels in [(1,[]),(2,[1]),(3,[1]),(4,[1,2]),(5,[1,2]),(6,[1,2,3])]:
+            run_rules(today=self.today+timedelta(days=day))
+            self.assertEqual(list(t.escalations.order_by('level').values_list('level',flat=True)),levels)
+        before=Notification.objects.count(); run_rules(today=self.today+timedelta(days=6))
+        self.assertEqual(Notification.objects.count(),before)
+        t.refresh_from_db(); self.assertEqual((t.status,t.progress),(Status.APPROVAL,100))
+        change_status(self.head,t,Status.CLOSED,'اعتماد')
+        before=Notification.objects.count(); run_rules(today=self.today+timedelta(days=7))
+        self.assertEqual(Notification.objects.count(),before)
+
+    def test_scheduler_command_executes_rules_without_web_request(self):
+        from django.core.management import call_command
+        t=self.task(start_date=self.today-timedelta(days=10),due_date=self.today-timedelta(days=3))
+        output=io.StringIO(); call_command('run_scheduler',once=True,stdout=output)
+        self.assertIn('rules evaluated',output.getvalue())
+        self.assertTrue(t.escalations.filter(level=1,recipient=self.head).exists())
+        self.assertTrue(t.escalations.filter(level=2,recipient=self.assistant).exists())
+        self.assertFalse(t.escalations.filter(level=3).exists())
+        self.assertTrue(t.activities.filter(action='تصعيد آلي').exists())

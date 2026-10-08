@@ -20,19 +20,15 @@ def signin(request):
     if request.user.is_authenticated: return redirect('dashboard')
     error=''
     if request.method=='POST':
-        identifier=request.POST.get('username','')[:254]
-        ip=request.META.get('REMOTE_ADDR','127.0.0.1')
-        cutoff=timezone.now()-timedelta(minutes=15)
-        failures=LoginAttempt.objects.filter(created_at__gte=cutoff,succeeded=False).filter(Q(ip=ip)|Q(identifier=identifier)).count()
-        if failures>=5: error='محاولات كثيرة. حاول بعد 15 دقيقة.'
-        else:
-            user=authenticate(request,username=identifier,password=request.POST.get('password',''))
-            LoginAttempt.objects.create(identifier=identifier,ip=ip,succeeded=bool(user))
+        from .auth import authenticate_attempt,LoginRateLimited
+        try:
+            user=authenticate_attempt(request,request.POST.get('username',''),request.POST.get('password',''))
             if user:
                 login(request,user)
                 services.audit(None,user,'تسجيل دخول ناجح')
                 return redirect('dashboard')
             error='بيانات الدخول غير صحيحة أو الحساب غير نشط.'
+        except LoginRateLimited as exc: error=str(exc)
     return render(request,'core/login.html',{'error':error})
 @login_required
 @require_POST
@@ -357,3 +353,33 @@ def permissions(request):
     if request.user.role!=Role.ADMIN: raise PermissionDenied()
     rows=[['مجلس الإدارة / أمين المجلس','القرارات والمهام المرتبطة وتقارير تنفيذها','لا','لا','قراءة النسب الكلية وسجل تدقيق القرارات'],['مسؤول النظام','المستخدمون والوحدات والإعدادات','لا','لا','إدارة المستخدمين والوحدات والإعدادات فقط'],['المدير التنفيذي / المساعد','جميع الوحدات','نعم','نعم؛ دون الاعتماد الذاتي','الاجتماعات والقرارات'],['رئيس الوحدة','مهام وحدته والمشارك بها','داخل الوحدة القائدة','داخل الوحدة القائدة','متابعة موظفي الوحدة'],['الموظف','مهامه كمسؤول أو مشارك','لا','لا','تحديث التنفيذ والردود'],['العرض فقط','المهام العادية لوحدته','لا','لا','قراءة وتقارير فقط']]
     return render(request,'core/permissions.html',{'rows':rows})
+
+
+# JSON session authentication uses Django CSRF protection even before login.
+from django.http import JsonResponse
+from django.middleware.csrf import get_token
+from django.views.decorators.csrf import ensure_csrf_cookie,csrf_protect
+from django.views.decorators.http import require_GET
+
+@require_GET
+@ensure_csrf_cookie
+def api_csrf(request):
+    return JsonResponse({'csrf_token':get_token(request)})
+
+@require_POST
+@csrf_protect
+def api_login(request):
+    import json
+    from .auth import authenticate_attempt,LoginRateLimited
+    try:
+        data=json.loads(request.body)
+        if not isinstance(data,dict): raise ValueError()
+        identifier=data.get('username',''); password=data.get('password','')
+        if not isinstance(identifier,str) or not isinstance(password,str) or len(identifier)>254 or len(password)>1024: raise ValueError()
+    except (ValueError,UnicodeDecodeError):
+        return JsonResponse({'detail':'طلب الدخول غير صالح.'},status=400)
+    try: user=authenticate_attempt(request,identifier,password)
+    except LoginRateLimited as exc: return JsonResponse({'detail':str(exc)},status=429)
+    if not user: return JsonResponse({'detail':'بيانات الدخول غير صحيحة أو الحساب غير نشط.'},status=401)
+    login(request,user); services.audit(None,user,'تسجيل دخول ناجح')
+    return JsonResponse({'id':user.pk,'name':str(user),'role':user.role,'csrf_token':get_token(request)})

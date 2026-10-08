@@ -44,3 +44,22 @@ docker compose up -d web scheduler
 ## تحديث
 
 راجع فحوص CI ثم اسحب الإصدار، خذ نسخة احتياطية، شغل `docker compose up --build -d`، وافحص سجلات الترحيل ودورة مهمة اختبارية. تثبيت المكتبات المضبوط في `requirements.lock`، والمديات المسموح بها في `requirements.txt`. لا تشغّل Django runserver للإنتاج.
+
+## Runtime activation and verification
+
+The hosted Sites preview is static; it does not run Django, authenticate employees, store uploads or execute scheduled rules. Production activation requires a Django/PostgreSQL host and domain/proxy configuration. Do not treat publishing the preview or pushing GitHub as starting these services.
+
+On the configured production host:
+
+```sh
+docker compose up -d --build
+docker compose ps
+docker compose logs --tail=50 scheduler
+docker compose exec -T scheduler python manage.py run_scheduler --once
+```
+
+The scheduler evaluates immediately and then every 60 seconds, without browser traffic. Each successful cycle logs its Riyadh timestamp and new escalation count; a database-not-ready error is logged and retried, while `--once` exits with an error for monitoring. Read the actual scheduler logs to verify activation. `--interval` is available for other deployment environments; run one continuous scheduler instance.
+
+Rules re-read saved settings each cycle. Escalation boundaries are calendar days after the due date in Asia/Riyadh, including pending approval/completed tasks, until closure or cancellation. Critical deadlines use `ceil(configured_days * critical_multiplier)`, with a minimum of one day. Each task/recipient/level is created once; repeated evaluations do not duplicate alerts. Audit records include the actual delay, effective threshold and reason. Stale updates use the Riyadh date of the last update.
+
+Acceptance before real use: log in through `/api/auth/login/`, upload a fictional TXT attachment, download it from an authorized account, verify another unit cannot download it, then verify a test overdue task reaches its configured escalation threshold. Confirm media survives a web-container restart and keep the scheduler logs as operational evidence.

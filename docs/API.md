@@ -64,3 +64,11 @@
 `POST /api/tasks/{id}/obstacles/` يتطلب reason مستقلًا وغير فارغ. تمديد استحقاق المهمة عبر PATCH يتطلب reason، والإعادة عبر transition تتطلب comment يوضح السبب. قيد حالة/نسبة الإنجاز يطبّق حتى على الكتابة المباشرة لقاعدة البيانات.
 
 الدور board (مجلس الإدارة / أمين المجلس) قراءة فقط: القرارات ونسبها الكلية والمهام المرتبطة. لا ينفّذ أي إجراء كتابة على المهام أو القرارات أو المتابعة الجماعية.
+
+## Session login from an API client
+
+1. GET `/api/auth/csrf/` and retain the returned `csrf_token` and cookie.
+2. POST JSON `{ "username": "email or phone", "password": "..." }` to `/api/auth/login/`, with the cookie and `X-CSRFToken`. Success returns the user ID/role and a rotated `csrf_token`; use the new token for subsequent writes. No credentials or session token are saved in frontend storage.
+3. GET `/api/auth/me/` checks the authenticated server session. POST `/api/auth/logout/` requires CSRF and invalidates it.
+
+Login returns 401 for invalid/inactive accounts and 429 after five failures within 15 minutes. HTML and API share the same database-backed limit. Login itself requires CSRF, including anonymous requests. Protected API endpoints reject anonymous clients; upload remains multipart at `/api/tasks/{id}/attachments/`, and file downloads pass the server's task/decision visibility policy at `/files/{id}/`.
