@@ -23,7 +23,7 @@ class WorkflowTests(TestCase):
         self.row=self.record();self.actor=self.users['secretary'];self.actor.set_password('test-password');self.actor.save()
         self.item=session.save_item(self.actor,self.row,{'title':'قرار موثق','kind':'decision','duration':15,'presenter':self.members['chair'],'owner':self.members['secretary']},'إعداد بند',self.refresh())
         session.publish_agenda(self.actor,self.row,'نشر',self.refresh());self.row=services.meeting_action(self.actor,self.row,'schedule','جدولة',self.refresh());session.issue_invitations(self.actor,self.row,'دعوة',self.refresh());self.refresh()
-        self.clock=patch('django.utils.timezone.now',return_value=self.row.starts_at+timedelta(minutes=5));self.clock.start();self.addCleanup(self.clock.stop)
+        self.clock=patch('django.utils.timezone.now',return_value=self.row.starts_at+timedelta(minutes=5));self.clock.start();self.addCleanup(lambda:self.clock.stop())
         for name in ['secretary','chair']:session.mark_attendance(self.actor,self.row,self.person(name),'present','تحقق فعلي','حضور')
         self.api=APIClient();self.api.force_authenticate(self.actor)
     def refresh(self):self.row.refresh_from_db();return self.row.version

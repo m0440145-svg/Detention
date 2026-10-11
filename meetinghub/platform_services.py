@@ -118,7 +118,9 @@ def destruction(user,document,reason):
 
 @transaction.atomic
 def approve_destruction(user,row,reason):
-    row=DestructionRequest.objects.select_for_update().select_related('document__committee','document__meeting').get(pk=row.pk);gov.manage(user,row.document.committee);reason=services.reason_required(reason)
+    document=Document.objects.get(pk=row.document_id)
+    if document.meeting_id:MeetingRecord.objects.select_for_update().get(pk=document.meeting_id)
+    row=DestructionRequest.objects.select_for_update(of=('self',)).select_related('document__committee','document__meeting').get(pk=row.pk);gov.manage(user,row.document.committee);reason=services.reason_required(reason)
     policy=RecordPolicy.objects.filter(meeting=row.document.meeting).first()
     if not policy or policy.legal_hold or not policy.expires_at or policy.expires_at>timezone.now():raise ValidationError('إتلاف مرفوض لسياسة أو حجز.')
     if user.pk==row.requester_id or user.pk==row.document.owner_id or row.executed_at:raise PermissionDenied('الإتلاف يحتاج موافقات مستقلة؛ لا موافقة الرافع أو تكرار التنفيذ.')
