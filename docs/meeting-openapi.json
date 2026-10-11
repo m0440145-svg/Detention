@@ -1,9 +1,9 @@
 {
   "openapi": "3.0.3",
   "info": {
-    "title": "Meeting governance — phases 1 and 2",
-    "version": "0.2.0",
-    "description": "Agenda revisions, invitations, frozen eligibility, actual attendance, proxies and internal reminders. Session writes require CSRF. Task approval roles are independent. External sending, votes and minutes remain later phases."
+    "title": "Meeting governance — phases 1–6",
+    "version": "0.3.0",
+    "description": "Authenticated and scoped internal meeting, execution and governance workflows. External providers require verified contracts and credentials. Static previews cannot save data."
   },
   "security": [
     {
@@ -715,6 +715,228 @@
           },
           "404": {
             "description": "Not authorized or unavailable"
+          }
+        }
+      }
+    },
+    "/api/governance-meetings/{id}/workflow/": {
+      "get": {
+        "summary": "GET scoped vote/minute/note snapshot. POST actions vote_create/open/close/cancel/cast, minute_save/review/sign/final/official, timer, speaker_join/speaking/done, note_save/to_minutes, decision_create, stage_save, execution_update, disclose/disclosure_approve, feedback/feedback_recommendation.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Scoped persisted response"
+          },
+          "400": {
+            "description": "Invalid data/state/version"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Record outside scope"
+          }
+        }
+      },
+      "post": {
+        "summary": "GET scoped vote/minute/note snapshot. POST actions vote_create/open/close/cancel/cast, minute_save/review/sign/final/official, timer, speaker_join/speaking/done, note_save/to_minutes, decision_create, stage_save, execution_update, disclose/disclosure_approve, feedback/feedback_recommendation.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Scoped persisted response"
+          },
+          "400": {
+            "description": "Invalid data/state/version"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Record outside scope"
+          }
+        }
+      }
+    },
+    "/api/governance-records/{kind}/": {
+      "get": {
+        "summary": "GET scoped typed governance records; POST save/submit/approve/reject/complete/end/cancel/archive/restore. UI link handler also attaches approved recommendations to existing decision/task.",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "compliance",
+                "finance",
+                "recommendation",
+                "service",
+                "volunteer",
+                "crisis"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Scoped persisted response"
+          },
+          "400": {
+            "description": "Invalid data/state/version"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Record outside scope"
+          }
+        }
+      },
+      "post": {
+        "summary": "GET scoped typed governance records; POST save/submit/approve/reject/complete/end/cancel/archive/restore. UI link handler also attaches approved recommendations to existing decision/task.",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "compliance",
+                "finance",
+                "recommendation",
+                "service",
+                "volunteer",
+                "crisis"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Scoped persisted response"
+          },
+          "400": {
+            "description": "Invalid data/state/version"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Record outside scope"
+          }
+        }
+      }
+    },
+    "/api/governance-elections/{id}/": {
+      "get": {
+        "summary": "GET approved candidates and closed aggregate result; POST cast/freeze/close. Nomination/review/proxy/create via authenticated HTML handlers.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Scoped persisted response"
+          },
+          "400": {
+            "description": "Invalid data/state/version"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Record outside scope"
+          }
+        }
+      },
+      "post": {
+        "summary": "GET approved candidates and closed aggregate result; POST cast/freeze/close. Nomination/review/proxy/create via authenticated HTML handlers.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Scoped persisted response"
+          },
+          "400": {
+            "description": "Invalid data/state/version"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Record outside scope"
+          }
+        }
+      }
+    },
+    "/api/meeting-features/": {
+      "get": {
+        "summary": "GET sanitized state and requirements; POST activation request. Administrative completion never marks a provider works.",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Scoped persisted response"
+          },
+          "400": {
+            "description": "Invalid data/state/version"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Record outside scope"
+          }
+        }
+      },
+      "post": {
+        "summary": "GET sanitized state and requirements; POST activation request. Administrative completion never marks a provider works.",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Scoped persisted response"
+          },
+          "400": {
+            "description": "Invalid data/state/version"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Record outside scope"
           }
         }
       }

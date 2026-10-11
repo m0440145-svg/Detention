@@ -6,6 +6,7 @@ from django.core.validators import MinValueValidator,MaxValueValidator
 from .models import MeetingRecord,Member
 
 class AgendaItem(models.Model):
+    def __str__(self):return self.title
     meeting=models.ForeignKey(MeetingRecord,on_delete=models.PROTECT,related_name='agenda_items')
     parent=models.ForeignKey('self',null=True,blank=True,on_delete=models.PROTECT,related_name='children')
     title=models.CharField(max_length=250)
@@ -68,6 +69,7 @@ class Roster(ImmutableSnapshot):
     class Meta:constraints=[models.UniqueConstraint(fields=['meeting','generation'],name='meeting_roster_generation')]
 
 class Eligibility(ImmutableSnapshot):
+    def __str__(self):return self.name
     roster=models.ForeignKey(Roster,on_delete=models.PROTECT,related_name='people')
     member=models.ForeignKey(Member,on_delete=models.PROTECT)
     name=models.CharField(max_length=200)
@@ -121,3 +123,9 @@ class Reminder(models.Model):
     cancelled_at=models.DateTimeField(null=True,blank=True)
     notification=models.OneToOneField('core.Notification',null=True,blank=True,on_delete=models.PROTECT)
     class Meta:constraints=[models.UniqueConstraint(fields=['invitation','kind'],name='meeting_reminder_dedup')]
+
+class AttendanceSpan(ImmutableSnapshot):
+    eligibility=models.ForeignKey(Eligibility,on_delete=models.PROTECT)
+    starts=models.DateTimeField()
+    ends=models.DateTimeField()
+    class Meta:constraints=[models.UniqueConstraint(fields=['eligibility','starts'],name='attendance_span_unique'),models.CheckConstraint(condition=models.Q(ends__gt=models.F('starts')),name='attendance_span_positive')]

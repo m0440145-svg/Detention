@@ -133,6 +133,7 @@ def save_meeting(user,data,invitees,instance=None,reason='',version=None,legacy=
     reason=reason_required(reason)
     if instance:
         row=MeetingRecord.objects.select_for_update().select_related('meeting','committee').get(pk=instance.pk);require_manage(user,row)
+        if row.closed_at:raise ValidationError('الاجتماع النهائي ثابت؛ التصحيح بإصدار محضر جديد.')
         if row.archived or row.status=='cancelled':raise ValidationError('استرجع الاجتماع المؤرشف أو الملغى قبل تعديله.')
         if version!=row.version:raise ValidationError('تغير الاجتماع بواسطة مستخدم آخر؛ أعد تحميله قبل الحفظ.')
     else:
@@ -175,6 +176,8 @@ def meeting_action(user,record,action,reason,version):
     row=MeetingRecord.objects.select_for_update().get(pk=record.pk);require_manage(user,row);reason=reason_required(reason)
     if version!=row.version:raise ValidationError('تغير الاجتماع؛ أعد تحميل الصفحة.')
     before=snapshot(row)
+    if row.closed_at and action in ['schedule','cancel','restore']:raise ValidationError('اجتماع نهائي ثابت؛ استخدم تصحيح المحضر.')
+    if action in ['cancel','restore'] and row.votes.exclude(status='draft').exists():raise ValidationError('اجتماع به تصويت موثق؛ لا إلغاء أو إعادة استخدام.')
     if action=='schedule':
         if row.archived or row.status!='draft':raise ValidationError('الجدولة متاحة للمسودة فقط.')
         row.full_clean()

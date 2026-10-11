@@ -12,6 +12,9 @@ def require_operational(user):
 def tasks_for(user):
     qs=Task.objects.select_related('owner','unit','decision','decision__meeting').prefetch_related('participants','participating_units','obstacles')
     if user.role==Role.ADMIN: return qs.none()
+    from meetinghub.services import records_for
+    visible_meetings=records_for(user,True).values('meeting_id')
+    qs=qs.filter(Q(decision__meeting__governance__isnull=True)|Q(decision__meeting__governance__secrecy='internal')|Q(decision__meeting_id__in=visible_meetings)|Q(owner=user)|Q(participants=user))
     if user.role==Role.BOARD: return qs.filter(decision__isnull=False)
     if user.role in GLOBAL_ROLES: return qs
     direct=Q(owner=user)|Q(participants=user)

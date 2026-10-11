@@ -24,6 +24,9 @@ class Command(BaseCommand):
                 run_schedules()
                 from meetinghub.session_services import run_reminders
                 meeting_reminders=run_reminders()
+                from meetinghub.execution_services import run_decision_alerts
+                from meetinghub.governance_services import run_governance_alerts
+                run_decision_alerts();run_governance_alerts()
                 if meeting_reminders:self.stdout.write(f"Meeting internal reminders: {meeting_reminders}")
                 if extracted: self.stdout.write(f'Extraction jobs completed: {extracted}')
                 self.stdout.write(f'{timezone.localtime().isoformat()} rules evaluated; new escalations: {count}')

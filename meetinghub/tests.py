@@ -115,10 +115,10 @@ class MeetingFoundationTests(TestCase):
         self.api.force_authenticate(self.users['exec'])
         result=self.api.post('/api/meetings/',{'number':'BYPASS','name':'اسم','committee':'نص','date':str(timezone.localdate())},format='json')
         self.assertEqual(result.status_code,400);self.assertEqual(Meeting.objects.count(),0)
-    def test_secret_meeting_decision_link_is_blocked_until_scope_extension(self):
+    def test_secret_meeting_decision_link_requires_authorized_scope(self):
         row=self.record(secrecy='secret')
         from core.services import save_decision
-        with self.assertRaises(ValidationError):save_decision(self.users['exec'],{'meeting':row.meeting,'number':'SECRET-DEC','text':'نص','date':timezone.localdate(),'due_date':timezone.localdate(),'issuing_authority':'committee','followup_owner':self.users['exec']})
+        with self.assertRaises(PermissionDenied):save_decision(self.users['exec'],{'meeting':row.meeting,'number':'SECRET-DEC','text':'نص','date':timezone.localdate(),'due_date':timezone.localdate(),'issuing_authority':'committee','followup_owner':self.users['exec']})
         self.assertFalse(Decision.objects.exists())
         self.client.force_login(self.users['exec']);self.assertNotContains(self.client.get('/manage/decision/new/'),'اجتماع تأسيسي')
 

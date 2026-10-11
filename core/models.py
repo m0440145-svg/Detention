@@ -153,6 +153,9 @@ class Task(models.Model):
         if self.progress==100 and self.status not in [Status.APPROVAL,Status.COMPLETED,Status.CLOSED,Status.CANCELLED]: raise ValidationError('نسبة 100% تستلزم انتظار الاعتماد أو الإكمال أو الإغلاق.')
     def clean(self):
         self.validate_status_progress()
+        if self.decision_id:
+            if self.decision.due_date and self.due_date>self.decision.due_date:raise ValidationError('موعد المهمة لا يتجاوز الموعد النهائي للقرار.')
+            if hasattr(self.decision.meeting,'governance') and self.decision.meeting.governance.secrecy=='secret' and self.confidentiality!='secret':raise ValidationError('مهمة القرار السري يجب أن تكون سرية.')
         if self.due_date and self.start_date and self.due_date<self.start_date: raise ValidationError('موعد الاستحقاق يجب أن يلي تاريخ البدء.')
         if self.owner_id and (not self.owner.is_active or self.owner.role in {Role.ADMIN,Role.VIEWER,Role.BOARD}): raise ValidationError('المسؤول الرئيسي يجب أن يكون حسابًا نشطًا له صلاحية التنفيذ.')
         if self.owner_id and self.unit_id and not self.owner.units.filter(pk=self.unit_id).exists(): raise ValidationError('المسؤول الرئيسي يجب أن ينتمي للوحدة القائدة.')

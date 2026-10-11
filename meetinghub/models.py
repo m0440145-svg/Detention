@@ -81,6 +81,7 @@ class MeetingRecord(models.Model):
     status=models.CharField(max_length=20,choices=[('draft','مسودة'),('scheduled','مجدول'),('cancelled','ملغى')],default='draft',db_index=True)
     archived=models.BooleanField(default=False,db_index=True)
     version=models.PositiveIntegerField(default=1)
+    closed_at=models.DateTimeField(null=True,blank=True)
     agenda_version=models.PositiveIntegerField(default=0)
     roster_generation=models.PositiveIntegerField(default=0)
     final_reminder_hours=models.PositiveSmallIntegerField(default=6,validators=[MinValueValidator(1),MaxValueValidator(168)])
@@ -124,3 +125,7 @@ class Event(models.Model):
     def delete(self,*args,**kwargs):raise ValidationError('سجل الاجتماعات لا يقبل الحذف.')
 
 from .session_models import *
+
+from .workflow_models import *
+
+from .governance_models import *

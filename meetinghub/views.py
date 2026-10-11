@@ -21,7 +21,13 @@ def listing(request):
     personal=Invitation.objects.filter(eligibility__member__user=request.user,eligibility__roster__meeting__in=records,eligibility__roster__generation=F('eligibility__roster__meeting__roster_generation'),revoked_at__isnull=True).select_related('eligibility__roster__meeting__meeting').order_by('eligibility__roster__meeting__starts_at')
     from django.core.paginator import Paginator
     committees=services.committees_for(request.user)
-    return render(request,'meetinghub/list.html',{'personal':personal,'rows':Paginator(records,25).get_page(request.GET.get('page')),'committees':committees,'may_create':any(services.can_manage(request.user,c) for c in committees),'legacy':Meeting.objects.filter(governance__isnull=True) if request.user.role in ['executive','assistant'] else Meeting.objects.none(),'archived':archived})
+    from .workflow_services import minute_visible,visible_votes
+    member=services.active_members().filter(user=request.user).first()
+    minutes_to_sign=[r for m in Minutes.objects.filter(meeting__in=records,status__in=['review','signed']) for r in [m.revisions.get(version=m.current_version)] if member and member.pk in r.signatories and minute_visible(request.user,r) and not r.signatures.filter(member=member).exists()]
+    open_votes=[v for r in records for v in visible_votes(request.user,r) if v.status=='open' and member and v.roster.people.filter(member=member,voting_eligible=True,pk__in=v.electorate).exists() and not v.participation.filter(eligibility__member=member).exists()]
+    from core.policy import tasks_for
+    my_tasks=tasks_for(request.user).filter(owner=request.user).exclude(status__in=['closed','cancelled'])
+    return render(request,'meetinghub/list.html',{'minutes_to_sign':minutes_to_sign,'open_votes':open_votes,'my_tasks':my_tasks,'personal':personal,'rows':Paginator(records,25).get_page(request.GET.get('page')),'committees':committees,'may_create':any(services.can_manage(request.user,c) for c in committees),'legacy':Meeting.objects.filter(governance__isnull=True) if request.user.role in ['executive','assistant'] else Meeting.objects.none(),'archived':archived})
 
 @login_required
 def compose(request,pk=None):

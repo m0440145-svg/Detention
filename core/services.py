@@ -37,6 +37,9 @@ def audit(task,user,action,old=None,new=None):
             previous_approved=round(previous_closed/total*100)
             if (previous_progress,previous_approved)!=(progress,approved):
                 Audit.objects.create(decision=d,actor=user,action='تحديث نسب القرار من '+task.code,old={'progress':previous_progress,'approved_progress':previous_approved},new={'progress':progress,'approved_progress':approved,'derived':True,'source_task_id':task.pk,'reason':new.get('reason') or new.get('comment') or action})
+    if task and task.decision_id:
+        from meetinghub.execution_services import task_changed
+        task_changed(task,user)
     return item
 def assignment_members(task,participants):
     ids={u.pk for u in participants}
@@ -285,7 +288,16 @@ def save_decision(user,data,instance=None,reason='',minutes_file=None):
     if not creating and not reason.strip(): raise ValidationError('سبب تعديل القرار مطلوب.')
     for key,value in data.items(): setattr(decision,key,value)
     from meetinghub.models import MeetingRecord
-    if MeetingRecord.objects.filter(meeting_id=decision.meeting_id,secrecy='secret').exists():raise ValidationError('ربط قرار باجتماع سري يحتاج امتداد صلاحيات السرية في المرحلة الرابعة.')
+    record=MeetingRecord.objects.filter(meeting_id=decision.meeting_id).first()
+    if record:
+        from meetinghub.services import records_for
+        if not records_for(user,True).filter(pk=record.pk).exists():raise PermissionDenied('الاجتماع خارج صلاحياتك.')
+    if instance:
+        from .views import decisions_for
+        if not decisions_for(user).filter(pk=instance.pk).exists():raise PermissionDenied('القرار خارج صلاحياتك.')
+        if hasattr(decision,'execution') and decision.due_date and decision.tasks.filter(due_date__gt=decision.due_date).exists():raise ValidationError('موعد القرار لا يسبق مهامه القائمة.')
+        if hasattr(decision,'execution') and decision.status=='executed':
+            if not decision.tasks.exists() or decision.tasks.exclude(status=Status.CLOSED).exists() or not decision.attachments.exists() or decision.execution.stages.exclude(progress=100).exists():raise ValidationError('الإغلاق يحتاج جميع المهام المعتمدة والمراحل المكتملة وشاهد تنفيذ.')
     if not decision.followup_owner.is_active or decision.followup_owner.role in {Role.ADMIN,Role.VIEWER,Role.BOARD}: raise ValidationError('مسؤول متابعة القرار يجب أن يكون حسابًا نشطًا له صلاحية التنفيذ.')
     if not decision.issuing_authority or not decision.due_date: raise ValidationError('الجهة المصدرة وتاريخ استحقاق القرار مطلوبان.')
     if minutes_file and not decision.approved_minutes_number.strip(): raise ValidationError('أدخل رقم المحضر المعتمد مع مرفقه.')
@@ -301,6 +313,8 @@ def save_decision(user,data,instance=None,reason='',minutes_file=None):
 def attach_decision(user,decision,upload,reason,approved_minutes=False):
     require_decision_manage(user)
     decision=Decision.objects.select_for_update().get(pk=decision.pk)
+    from .views import decisions_for
+    if not decisions_for(user).filter(pk=decision.pk).exists():raise PermissionDenied()
     if not reason.strip(): raise ValidationError('سبب رفع المرفق أو استبداله مطلوب.')
     if approved_minutes and not decision.approved_minutes_number: raise ValidationError('أدخل رقم المحضر المعتمد أولًا.')
     validate_upload(upload)

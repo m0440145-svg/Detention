@@ -39,3 +39,19 @@ class Command(BaseCommand):
             invite=ops.live_roster(row).people.get(member=members[0]).invitation
             ops.respond(invite,'confirm',members[0].user)
         self.stdout.write('Created fictional agenda, frozen eligibility and internal invitations; no external message or actual attendance.')
+
+        from meetinghub import workflow_services as workflow,governance_services as gov,election_services as election,platform_services as platform
+        from meetinghub.models import Minutes,Document
+        if not Minutes.objects.filter(meeting=row).exists():
+            workflow.save_minutes(executive,row,'مسودة عرض تجريبية فقط — لا محضر معتمد ولا توقيع رسمي.',[members[0].pk,members[1].pk],'إعداد مسودة وهمية لعرض الواجهات')
+        if not row.votes.exists():
+            item=row.agenda_items.filter(removed=False).first()
+            workflow.create_vote(executive,row,item,'استطلاع تجريبي — لم يفتح ولم يسجل اقتراع',True,'cast',51,'قاعدة عرض تجريبية فقط',row.ends_at,purpose='poll')
+        if not Document.objects.filter(committee=committee).exists():
+            gov.upload_document(executive,committee,SimpleUploadedFile('demo-governance.txt','شاهد وهمي للعرض فقط'.encode(),content_type='text/plain'),meeting=row,secret=True)
+        if not committee.governanceentry_set.exists():
+            gov.save_entry(executive,'recommendation',committee,'توصية تجريبية لتحسين المتابعة',executive,{'source':'عرض تجريبي','priority':'normal','expected_impact':'أثر متوقع غير مقاس — بيانات عرض فقط','review_date':(today+timedelta(days=30)).isoformat()},'عرض تجريبي',meeting=row,due_date=today+timedelta(days=30),secret=False)
+            gov.save_entry(executive,'compliance',committee,'سجل تحقق تجريبي — ليس التزامًا قانونيًا معتمدًا',executive,{'regulator':'لم يحدد مصدر رسمي في بيانات العرض','article':'بانتظار النص المعتمد','action':'التحقق من المصدر','frequency':'بحسب المصدر بعد التحقق','gap':'لا اعتماد قانوني','remediation':'مراجعة الجهة المخولة'},'عرض حالة التحقق دون اختلاق التزام',meeting=row,due_date=today+timedelta(days=15),secret=False)
+        if not committee.election_set.exists():
+            election.create_election(executive,committee,'دورة انتخابات تجريبية — نافذة ترشح فقط',timezone.now(),timezone.now()+timedelta(days=7),timezone.now()+timedelta(days=14),1,'لائحة عرض وهمية؛ لا تمثل انتخابات فعلية')
+        platform.features()

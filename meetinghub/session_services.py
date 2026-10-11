@@ -15,7 +15,7 @@ from . import services
 def locked(user,record):
     row=MeetingRecord.objects.select_for_update().select_related('committee','meeting').get(pk=record.pk)
     services.require_manage(user,row)
-    if row.archived or row.status=='cancelled':raise ValidationError('الاجتماع مؤرشف أو ملغى.')
+    if row.archived or row.status=='cancelled' or row.closed_at:raise ValidationError('الاجتماع مؤرشف أو ملغى.')
     return row
 
 def live_roster(record):return record.rosters.filter(generation=record.roster_generation).first()
@@ -125,6 +125,8 @@ def upload_file(user,record,upload,reason,version,item=None,purpose='agenda'):
 
 def file_allowed(user,file):
     if not services.records_for(user,True).filter(pk=file.meeting_id).exists():return False
+    from .platform_services import permit_download
+    if not permit_download(file.meeting):return False
     record=file.meeting
     if services.can_manage(user,record.committee):return True
     if file.purpose=='proxy':return file.proxy_records.filter(Q(principal__member__user=user)|Q(delegate__member__user=user),revoked_at__isnull=True).exists()
@@ -221,6 +223,7 @@ def mark_attendance(user,record,eligibility,status,verification,reason):
     if not verification.strip():raise ValidationError('طريقة التحقق من الحضور مطلوبة.')
     row=Attendance.objects.filter(eligibility=eligibility).first()
     before=row.status if row else 'unrecorded';row=row or Attendance(eligibility=eligibility)
+    if before in ['present','remote'] and status in ['left','disconnected','absent'] and row.entered_at and now>row.entered_at:AttendanceSpan.objects.get_or_create(eligibility=eligibility,starts=row.entered_at,defaults={'ends':now})
     if status in ['left','disconnected'] and before not in ['present','remote']:raise ValidationError('الخروج أو فقد الاتصال يحتاج حضورًا فعليًا سابقًا.')
     if status in ['present','remote'] and before not in ['present','remote']:
         row.entered_at=now;row.first_entered_at=row.first_entered_at or now;row.exited_at=None

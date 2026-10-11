@@ -190,6 +190,8 @@ def followup(request):
 def decisions_for(user):
     qs=Decision.objects.select_related('meeting','followup_owner','approved_minutes_attachment').prefetch_related('tasks')
     if user.role==Role.ADMIN: return qs.none()
+    from meetinghub.services import records_for
+    qs=qs.filter(Q(meeting__governance__isnull=True)|Q(meeting__governance__secrecy='internal')|Q(meeting_id__in=records_for(user,True).values('meeting_id'))|Q(followup_owner=user)|Q(tasks__in=tasks_for(user))).distinct()
     if user.role in DECISION_READ_ROLES: return qs
     return qs.filter(Q(tasks__in=tasks_for(user))|Q(followup_owner=user)).distinct()
 def decision_metrics(user,decision):
@@ -335,6 +337,12 @@ def notifications(request):
 @login_required
 def download(request,pk):
     a=get_object_or_404(Attachment,pk=pk)
+    decision=a.decision or (a.task.decision if a.task_id else (a.subtask.task.decision if a.subtask_id else None))
+    if decision:
+        from meetinghub.models import MeetingRecord
+        from meetinghub.platform_services import permit_download
+        record=MeetingRecord.objects.filter(meeting_id=decision.meeting_id).first()
+        if record and not permit_download(record):raise Http404()
     task_id=a.task_id or (a.subtask.task_id if a.subtask_id else None)
     allowed=tasks_for(request.user).filter(pk=task_id).exists() if task_id else decisions_for(request.user).filter(pk=a.decision_id).exists()
     if not allowed: raise Http404()
